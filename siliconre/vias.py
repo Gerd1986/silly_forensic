@@ -1,3 +1,7 @@
+try:
+    from .roi_reader import read_gray_roi
+except ImportError:
+    from roi_reader import read_gray_roi
 """Experimental via-like circular feature proposals from a bounded SEM ROI."""
 import cv2
 import numpy as np
@@ -9,10 +13,7 @@ def detect_via_candidates(image_path, roi, min_radius=3, max_radius=30):
         raise ValueError("ROI must be within 12 megapixels")
     if min_radius < 1 or max_radius < min_radius:
         raise ValueError("Invalid radius range")
-    with Image.open(image_path) as source:
-        if x+w > source.width or y+h > source.height:
-            raise ValueError("ROI exceeds image bounds")
-        gray = np.asarray(ImageOps.grayscale(source.crop((x,y,x+w,y+h))), dtype=np.uint8)
+    gray=read_gray_roi(image_path,(x,y,w,h))
     blurred = cv2.GaussianBlur(gray, (5,5), 1.2)
     circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, dp=1.2,
                               minDist=max(2*min_radius, 8), param1=110,
