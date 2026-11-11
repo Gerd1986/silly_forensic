@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
 )
 
 from tiles import TiledImage
+from registration import estimate_translation
+from pyramid import build_pyramid
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -97,6 +99,8 @@ class MainWindow(QMainWindow):
             ("Mark point", self.toggle_mark),
             ("Overlay layer", self.choose_overlay),
             ("Align overlay (dx,dy)", self.align_overlay),
+            ("Auto-align overlay", self.auto_align_overlay),
+            ("Build TIFF pyramid", self.create_pyramid),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -199,6 +203,40 @@ class MainWindow(QMainWindow):
         with self.db() as db:
             db.execute("INSERT OR REPLACE INTO alignments(base,overlay,dx,dy) VALUES (?,?,?,?)",
                        (self.current_layer, self.overlay_layer, dx, dy))
+
+    def auto_align_overlay(self):
+        if not self.current_layer or not self.overlay_layer:
+            QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
+            return
+        with self.db() as db:
+            base = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
+            overlay = db.execute("SELECT path FROM layers WHERE name=?", (self.overlay_layer,)).fetchone()[0]
+        try:
+            dx, dy, confidence = estimate_translation(base, overlay)
+            if confidence < 0.1:
+                QMessageBox.warning(self, "Weak registration", f"Low phase-correlation response ({confidence:.3f}). No change applied.")
+                return
+            self.viewer.overlay.setPos(dx, dy)
+            with self.db() as db:
+                db.execute("INSERT OR REPLACE INTO alignments(base,overlay,dx,dy) VALUES (?,?,?,?)",
+                           (self.current_layer, self.overlay_layer, dx, dy))
+            self.statusBar().showMessage(f"Auto alignment: dx={dx:.1f}, dy={dy:.1f}, response={confidence:.3f}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Registration failed", str(exc))
+
+    def create_pyramid(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            source = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
+        destination, _ = QFileDialog.getSaveFileName(self, "Save tiled pyramid", str(self.project / (self.current_layer + "_pyramid.tif")), "TIFF (*.tif)")
+        if not destination:
+            return
+        try:
+            build_pyramid(source, destination)
+            self.statusBar().showMessage("Pyramid saved: " + destination)
+        except Exception as exc:
+            QMessageBox.warning(self, "Pyramid failed", str(exc))
 
     def update_opacity(self, value):
         if self.viewer.overlay:
