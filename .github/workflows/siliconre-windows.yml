@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v0.3.0)'
+        description: 'Release tag (e.g. v0.3.1)'
         type: string
-        default: 'v0.3.0'
+        default: 'v0.3.1'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
@@ -34,33 +34,40 @@ jobs:
         run: python -m compileall -q siliconre
       - name: Build portable application
         run: pyinstaller --noconfirm --clean --onedir --windowed --name SiliconRE --paths siliconre siliconre/app.py
+      - name: Build standalone MCP server
+        run: pyinstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --collect-all mcp --collect-all pydantic --collect-all pydantic_core siliconre/mcp_server.py
       - name: Archive application
         shell: pwsh
-        run: Compress-Archive -Path dist/SiliconRE -DestinationPath SiliconRE-Windows-x64.zip
+        run: |
+          Compress-Archive -Path dist/SiliconRE -DestinationPath SiliconRE-Windows-x64.zip
+          Compress-Archive -Path dist/SiliconRE-MCP -DestinationPath SiliconRE-MCP-Windows-x64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: SiliconRE-Windows-x64
-          path: SiliconRE-Windows-x64.zip
+          path: |
+            SiliconRE-Windows-x64.zip
+            SiliconRE-MCP-Windows-x64.zip
       - name: Validate release tag
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v0.3.0' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.3.1' || inputs.version }}
         run: |
           if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.3.0' }
       - name: Publish GitHub release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.3.1' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
           SiliconRE v0.3 preview.
-          - SEM viewer, annotations and project database\n          - Editable trace candidates, review status, resizing and CSV export
+          - SEM viewer, annotations and project database
+          - Editable trace candidates, review status, resizing and CSV export
           - Layer overlay and manual/automatic translation registration
           - Zoom-dependent TIFF rendering and optional libvips reader
-          - Windows portable executable and read-only MCP interface
+          - Separate portable Windows MCP server executable with trace candidate queries
           
           Experimental preview. Validate with your own SEM images.
           '@
@@ -70,5 +77,5 @@ jobs:
             Write-Host "Release $env:TAG already exists; skipping duplicate publication"
             exit 0
           }
-          gh release create "$env:TAG" SiliconRE-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
+          gh release create "$env:TAG" SiliconRE-Windows-x64.zip SiliconRE-MCP-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }
