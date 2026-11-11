@@ -6,6 +6,7 @@ from mcp.server.fastmcp import FastMCP
 from netgraph import list_links, connected_groups
 from vias import list_vias
 from reconstruction import reconstruct, export_verilog, export_vhdl
+from via_matching import suggest_via_pairs
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -82,6 +83,12 @@ def get_structural_hdl(language: str = "verilog") -> str:
         if language == "vhdl":
             return export_vhdl(db)
         raise ValueError("Language must be verilog or vhdl")
+
+@server.tool()
+def suggest_cross_layer_vias(base_layer: str, overlay_layer: str, tolerance_px: float = 10.0) -> list[dict]:
+    """Read-only geometric via pairing suggestions based on saved layer alignment; unverified."""
+    with connect() as db:
+        return suggest_via_pairs(db,base_layer,overlay_layer,tolerance_px)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
