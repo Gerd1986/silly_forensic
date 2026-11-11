@@ -26,6 +26,7 @@ from devices import add_device, list_devices, resolve_devices, spice_netlist
 from mos_detection import detect_mos_candidates, ensure_mos_candidate_schema, list_mos_candidates
 from debug_ports import analyze_debug_interfaces
 from logic_analysis import KINDS, PINS, add_logic_cell, resolved_cells, analyze_sequential
+from batch_import import images_in_folder, plan_import
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
             ("New project", self.new_project),
             ("Open project", self.open_project),
             ("Add SEM image", self.import_image),
+            ("Add multiple SEM images", self.import_images),
+            ("Import image folder", self.import_folder),
             ("Mark point", self.toggle_mark),
             ("Overlay layer", self.choose_overlay),
             ("Align overlay (dx,dy)", self.align_overlay),
@@ -192,6 +195,51 @@ class MainWindow(QMainWindow):
             db.execute("INSERT OR REPLACE INTO layers(name,path) VALUES (?,?)", (name.strip(), path))
         self.refresh_layers()
         self.layers.setCurrentRow(self.layers.count()-1)
+
+    def _import_many(self, paths):
+        if not self.project:
+            QMessageBox.information(self,"Project required","Create or open a project first")
+            return
+        with self.db() as db:
+            existing=[row[0] for row in db.execute("SELECT name FROM layers")]
+            planned=plan_import(paths,existing)
+        if not planned:
+            QMessageBox.information(self,"Batch import","No supported images found")
+            return
+        confirmation=QMessageBox.question(self,"Import SEM images",
+            f"Import {len(planned)} images?\nNames are derived from filenames. Existing layers are preserved.")
+        if confirmation!=QMessageBox.StandardButton.Yes:
+            return
+        with self.db() as db:
+            db.executemany("INSERT INTO layers(name,path) VALUES (?,?)",planned)
+        self.refresh_layers()
+        self.layers.setCurrentRow(self.layers.count()-1)
+        self.statusBar().showMessage(f"Imported {len(planned)} SEM images")
+
+    def import_images(self):
+        if not self.project:
+            QMessageBox.information(self,"Project required","Create or open a project first")
+            return
+        paths,_=QFileDialog.getOpenFileNames(self,"Select SEM images","",
+                            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
+        if paths:
+            self._import_many(paths)
+
+    def import_folder(self):
+        if not self.project:
+            QMessageBox.information(self,"Project required","Create or open a project first")
+            return
+        folder=QFileDialog.getExistingDirectory(self,"Select SEM image folder")
+        if not folder:
+            return
+        recursive=QMessageBox.question(self,"Folder import",
+            "Include images in subfolders too?",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes
+        try:
+            self._import_many(images_in_folder(folder,recursive))
+        except (ValueError,OSError) as exc:
+            QMessageBox.warning(self,"Folder import",str(exc))
 
     def select_layer(self, name):
         if not name or not self.project:
