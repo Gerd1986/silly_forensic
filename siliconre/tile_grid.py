@@ -65,6 +65,7 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000):
     output_bytes=int(np.prod(shape,dtype=np.int64))
     if shutil.disk_usage(target.parent).free < output_bytes+100_000_000:
         raise ValueError(f"Not enough free disk space ({output_bytes/1e9:.2f} GB needed)")
+    canvas=None
     try:
         canvas=tifffile.memmap(temp,shape=shape,dtype=np.uint8,bigtiff=True,
                               photometric="minisblack" if channels==1 else "rgb")
@@ -77,7 +78,9 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000):
             y,x=(row-r0)*th,(col-c0)*tw
             canvas[y:y+th,x:x+tw]=tile
         canvas.flush()
-        del canvas
+        # Explicitly close the underlying Windows mmap before renaming.
+        canvas._mmap.close()
+        canvas=None
         temp.replace(target)
         result={"method":"filename_tile_grid_bigtiff",
                 "row_direction":"increasing_down","column_direction":"increasing_right",
@@ -90,5 +93,8 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000):
             json.dumps(result,indent=2),encoding="utf-8")
         return result
     finally:
+        if canvas is not None:
+            canvas._mmap.close()
+            canvas=None
         if temp.exists():
             temp.unlink()
