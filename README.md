@@ -47,3 +47,6 @@ GitHub Actions workflow `SiliconRE Windows build` compiles the sources and build
 
 ## Optional libvips reader
 TIFFs preferentially use `pyvips` for random-access tile reads when both the Python binding and native libvips are installed; otherwise the Pillow reader is used. Install `pyvips` and a compatible Windows libvips runtime separately. The CI-built EXE currently does **not** bundle the native libvips DLLs, so its TIFF handling falls back to Pillow. Pyramid SubIFD compatibility and 16-bit contrast fidelity need validation with representative SEM images.
+
+## Publishing a prerelease
+From **Actions → SiliconRE Windows build and release → Run workflow**, choose `feature/siliconre-v0.1`, check `publish_release`, and enter `v0.1.0`. After a successful build, GitHub CLI creates a prerelease tagged at that exact commit and uploads `SiliconRE-Windows-x64.zip`. Ordinary pushes only build and upload an Actions artifact; they do not publish releases. To publish another version, choose a new unused tag.
