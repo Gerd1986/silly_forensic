@@ -285,3 +285,32 @@ and actual Qt scene rendering were checked against the complete local M1 TIFF.
 This changes display only. Existing source TIFFs, stitched mosaics, project
 coordinates and feature coordinates need no reconstruction or conversion.
 Restart with v1.10.1 and reopen the existing project.
+
+## v1.10.2 bounded previews for automatic overlay alignment
+
+Auto-align no longer opens a complete multi-gigapixel TIFF through Pillow.
+Uncompressed TIFF mosaics use the memory-mapped reader and streamed box averaging
+into a preview of at most 1536 pixels per side. Temporary reductions use source
+row bands; no full-resolution grayscale image is allocated. Up to four small
+read-only previews are cached and invalidated by file size/mtime. Pillow's
+decompression protection remains enabled.
+
+The two mosaics use **one common source-pixel sampling step**. Different mosaic
+widths and heights are padded on a common preview canvas instead of independently
+stretched or rejected. Images must still share pixel scale and orientation.
+The result remains a translation in original base-image coordinates.
+
+A low phase-correlation response is rejected without changing the stored
+alignment. The message now explains that different layer structure, rotation
+or scale changes can prevent translation-only matching. This is not a general
+affine or nonrigid inter-layer registration method.
+
+Validation covers a 225-megapixel TIFF with Pillow decoding explicitly forbidden,
+partial box-average blocks, 16-bit previews, displacement direction, unequal
+mosaic dimensions and flat-image rejection. All 71 local regression tests pass.
+The existing large M1/M2/M3/POLY project TIFFs were read successfully: M1/POLY
+produced a provisional translation candidate, while M2 and M3 had insufficient
+phase correlation. Those weak matches must not be applied as verified alignment.
+No source TIFF, annotation or existing project alignment was modified by validation.
+
+Restart with v1.10.2 and reopen the existing project; restitching is unnecessary.

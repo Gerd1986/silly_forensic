@@ -5,7 +5,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPointF
+from PySide6.QtCore import Qt, QPointF, QEventLoop
 from PySide6.QtGui import QAction, QPixmap, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsScene,
@@ -85,7 +85,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.10.1 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.10.2 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -363,10 +363,15 @@ class MainWindow(QMainWindow):
         with self.db() as db:
             base = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
             overlay = db.execute("SELECT path FROM layers WHERE name=?", (self.overlay_layer,)).fetchone()[0]
+        self.statusBar().showMessage("Preparing bounded previews for automatic translation...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
         try:
             dx, dy, confidence = estimate_translation(base, overlay)
             if confidence < 0.1:
-                QMessageBox.warning(self, "Weak registration", f"Low phase-correlation response ({confidence:.3f}). No change applied.")
+                QMessageBox.warning(self, "Weak registration",
+                    f"No reliable translation found (response {confidence:.3f}). No change applied.\n"
+                    "Different layer structures, rotation or scale changes can prevent translation-only alignment.")
                 return
             self.viewer.overlay.setPos(dx, dy)
             with self.db() as db:
@@ -375,6 +380,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Auto alignment: dx={dx:.1f}, dy={dy:.1f}, response={confidence:.3f}")
         except Exception as exc:
             QMessageBox.warning(self, "Registration failed", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def create_pyramid(self):
         if not self.current_layer:
