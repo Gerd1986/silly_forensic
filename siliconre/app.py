@@ -21,6 +21,7 @@ from candidates import CandidateRect, ensure_schema
 from netgraph import add_link, list_links, connected_groups, ensure_net_schema
 from vias import detect_via_candidates, ensure_via_schema, list_vias
 from reconstruction import associate_via_trace, connect_vias, reconstruct, export_json, export_verilog, export_vhdl
+from via_matching import suggest_via_pairs
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -121,6 +122,7 @@ class MainWindow(QMainWindow):
             ("Export vias JSON", self.export_vias),
             ("Associate via to trace", self.associate_via),
             ("Connect vias across layers", self.connect_layer_vias),
+            ("Suggest aligned via pairs", self.suggest_aligned_vias),
             ("Export reconstructed nets", self.export_reconstruction),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
@@ -546,6 +548,42 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Manual cross-layer via link saved; electrical continuity unverified")
         except ValueError as exc:
             QMessageBox.warning(self,"Cross-layer via",str(exc))
+
+    def suggest_aligned_vias(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            options=[row[0] for row in db.execute(
+                "SELECT name FROM layers WHERE name != ? ORDER BY name",(self.current_layer,))]
+        if not options:
+            return
+        overlay,ok=QInputDialog.getItem(self,"Via pairing","Compare with layer:",options,0,False)
+        if not ok:
+            return
+        tolerance,ok=QInputDialog.getDouble(self,"Via pairing","Maximum center distance (pixels):",10,0.1,10000,1)
+        if not ok:
+            return
+        try:
+            with self.db() as db:
+                proposals=suggest_via_pairs(db,self.current_layer,overlay,tolerance)
+            if not proposals:
+                QMessageBox.information(self,"Via pairing","No matching accepted via candidates")
+                return
+            choices=[f"Via #{p['via_a']} ↔ #{p['via_b']} ({p['distance_px']:.2f} px)" for p in proposals]
+            choice,ok=QInputDialog.getItem(self,"Review suggested pair",
+                                            "Select one proposed pair to connect:",choices,0,False)
+            if not ok:
+                return
+            selected=proposals[choices.index(choice)]
+            answer=QMessageBox.question(self,"Confirm manual link",
+                "Save this visually suggested cross-layer connection? Electrical continuity is NOT verified.")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+            with self.db() as db:
+                connect_vias(db,selected["via_a"],selected["via_b"])
+            self.statusBar().showMessage("Reviewed cross-layer via link saved")
+        except ValueError as exc:
+            QMessageBox.warning(self,"Via pairing",str(exc))
 
     def export_reconstruction(self):
         if not self.project:
