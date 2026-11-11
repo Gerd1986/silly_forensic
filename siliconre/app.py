@@ -188,6 +188,7 @@ class MainWindow(QMainWindow):
                 self.viewer.draw_marker(x,y,label)
             for candidate in candidates:
                 self.show_candidate(candidate)
+            self.refresh_link_lines()
             self.statusBar().showMessage(name + " — " + row[0])
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
@@ -297,6 +298,7 @@ class MainWindow(QMainWindow):
             db.execute("UPDATE trace_candidates SET x=?,y=?,width=?,height=?,status=? WHERE id=? AND layer=?",
                        (item.pos().x(), item.pos().y(), item.rect().width(), item.rect().height(),
                         item.status, item.row_id, item.layer))
+        self.refresh_link_lines()
 
     def review_selected(self, status):
         for item in self.viewer.scene_.selectedItems():
@@ -311,6 +313,7 @@ class MainWindow(QMainWindow):
                 db.execute("DELETE FROM candidate_links WHERE layer=? AND (source_id=? OR target_id=?)", (item.layer, item.row_id, item.row_id))
                 db.execute("DELETE FROM trace_candidates WHERE id=? AND layer=?", (item.row_id, item.layer))
                 self.viewer.scene_.removeItem(item)
+        self.refresh_link_lines()
 
     def resize_selected(self):
         items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
@@ -326,6 +329,7 @@ class MainWindow(QMainWindow):
             return
         item.setRect(0, 0, width, height)
         self.save_candidate(item)
+        self.refresh_link_lines()
 
     def export_candidates(self):
         if not self.current_layer:
@@ -345,6 +349,28 @@ class MainWindow(QMainWindow):
             writer.writerows(rows)
         self.statusBar().showMessage(f"Exported {len(rows)} candidates to {path}")
 
+    def refresh_link_lines(self):
+        if not self.current_layer:
+            return
+        for item in list(self.viewer.scene_.items()):
+            if item.data(0) == "manual_link":
+                self.viewer.scene_.removeItem(item)
+        candidates = {item.row_id: item for item in self.viewer.scene_.items()
+                      if isinstance(item, CandidateRect)}
+        with self.db() as db:
+            links = list_links(db, self.current_layer)
+        for edge in links:
+            a = candidates.get(edge["source_id"])
+            b = candidates.get(edge["target_id"])
+            if a is None or b is None:
+                continue
+            pa = a.mapToScene(a.rect().center())
+            pb = b.mapToScene(b.rect().center())
+            line = self.viewer.scene_.addLine(pa.x(), pa.y(), pb.x(), pb.y(), QPen(QColor("#ff66ff"), 2))
+            line.setZValue(4)
+            line.setData(0, "manual_link")
+            line.setToolTip("Manual visual connection; electrical continuity unverified")
+
     def connect_selected(self):
         items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
         if len(items) != 2:
@@ -353,6 +379,7 @@ class MainWindow(QMainWindow):
         try:
             with self.db() as db:
                 add_link(db, self.current_layer, items[0].row_id, items[1].row_id)
+            self.refresh_link_lines()
             self.statusBar().showMessage("Manual connection saved (not electrically verified)")
         except ValueError as exc:
             QMessageBox.warning(self, "Connect", str(exc))
@@ -367,6 +394,7 @@ class MainWindow(QMainWindow):
             ensure_net_schema(db)
             db.execute("DELETE FROM candidate_links WHERE layer=? AND source_id=? AND target_id=?",
                        (self.current_layer, a, b))
+        self.refresh_link_lines()
         self.statusBar().showMessage("Manual connection removed")
 
     def export_nets(self):
