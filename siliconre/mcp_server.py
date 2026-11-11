@@ -8,6 +8,7 @@ from vias import list_vias
 from reconstruction import reconstruct, export_verilog, export_vhdl
 from via_matching import suggest_via_pairs
 from devices import resolve_devices, spice_netlist
+from mos_detection import list_mos_candidates
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -102,6 +103,12 @@ def get_spice_netlist() -> str:
     """Read SPICE netlist of manually annotated MOS devices; models not supplied."""
     with connect() as db:
         return spice_netlist(db)
+
+@server.tool()
+def list_mos_crossing_candidates(poly_layer: str = "", status: str = "") -> list[dict]:
+    """Read POLY/ACTIVE overlap proposals; they are not confirmed transistors."""
+    with connect() as db:
+        return list_mos_candidates(db,poly_layer,status)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
