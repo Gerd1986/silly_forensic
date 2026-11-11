@@ -116,7 +116,49 @@ Use **Add multiple SEM images** to select many files at once, or **Import image 
 Use **Stitch selected SEM images** or **Stitch SEM image folder**. Each batch produces exactly one stitched TIFF and one named layer. Files must depict overlapping areas of the **same physical delayering level** and be sufficiently textured for OpenCV's SCANS stitcher to register them. Output is saved under `project/stitched_layers/`; a `.sources.json` sidecar records original paths. Original files are not changed. Failed alignment stops the import without creating a layer; no blind tiling or fabricated positions. Image stitching is memory-intensive and currently capped at 24 megapixels per source and 120 megapixels per mosaic. The GUI operation is synchronous and may temporarily block interaction. Existing imported layers remain untouched. To combine existing layers, re-import their source images together into a new mosaic layer. Stitching is not suitable for distinct POLY/METAL/VIA levels: those should be separate layers aligned via overlay registration.
 
 ## v1.5 deterministic tile-grid stitching
-When filenames follow `Tile_013-017-000000_0-000.s0001_e00.tif`, choose **Tile grid (filename row-column)** (automatically preselected when every filename matches). The first number is the row (013), the second the column (017). Increasing rows are laid out downward, increasing columns rightward. Kacheln are placed without OpenCV feature matching. Duplicate positions and inconsistent tile dimensions cause an error. Missing cells are gray and listed in `.sources.json`, with a confirmation warning. All source images are kept unchanged; one mosaic TIFF becomes one layer. For scans with physical overlap or reversed acquisition directions, verify orientation and seams; this mode does not estimate or correct overlap. The existing image-matching mode remains selectable. Currently the tile grid is limited to 120 megapixels and converts 16-bit grayscale inputs to 8-bit; use source files for quantitative pixel work.
+When filenames follow `Tile_013-017-000000_0-000.s0001_e00.tif`, the first number is the row and the second the column. Increasing rows run down; increasing columns run right. Select **Tile grid (edge-to-edge, no overlap)** only for images that have already been cropped to meet exactly. Duplicate coordinates and different tile dimensions are rejected. Missing cells are reported and require confirmation. See the overlap-aware mode below for uncut SEM acquisitions.
 
 ## v1.6 large tile grids
 Tile-grid mode now uses a disk-backed, uncompressed BigTIFF via tifffile.memmap rather than allocating the complete mosaic in RAM. The previous 120 MP guard is replaced with a 25-billion-pixel ceiling and a free-disk-space check. A 77,824 x 53,248 8-bit grayscale mosaic needs approximately 4.14 GB of disk, RGB approximately 12.43 GB. The GUI operation is synchronous and may take significant time. Very large BigTIFF viewing depends on the TIFF reader; use the optional libvips reader for efficient display if Pillow cannot handle the file. Output is currently 8-bit, so quantitative 16-bit SEM data should not be processed with this mode until native-depth support is implemented.
+
+## v1.8 overlap-aware SEM tile stitching
+
+Use **Stitch selected SEM images** or **Stitch SEM image folder**, then choose
+**Tile grid (automatic overlap alignment)**. This is preselected for
+`Tile_ROW-COL...` filenames. Import uncut neighboring images from the same
+physical layer, then give the assembled layer a name.
+
+The filename provides topology, not the final pixel distance. Normalized
+cross-correlation finds each horizontal and vertical neighbor's displacement,
+refines it at original resolution, and fits a consistent global position graph.
+The supported search range is **5–50% overlap**, with transverse drift up to
+approximately **8%**. Images must have equal dimensions and at least 32 pixels
+per side. Acquisition orientation is increasing rows downward and columns rightward.
+Rotation, scale differences, reversed scan directions, and different delayering
+levels require another registration workflow.
+
+Flat areas, ambiguous repeating patterns, unrelated images, disconnected grids,
+and inconsistent loops are rejected with an explanation. No guessed placement
+is used after an alignment failure. Missing cells are allowed only if the
+remaining neighboring tiles form a connected graph.
+
+One uncompressed, disk-backed BigTIFF is written for the new layer. Source
+images need no manual cropping. Original pixels are translated to integer
+coordinates without geometric warping or averaging; overlaps use the later
+tile in sorted row/column order. This can retain a brightness seam if exposures
+differ. The sources remain unchanged. The output remains 8-bit, as in the
+existing grid writer.
+
+The `.sources.json` records each source's actual mosaic position, neighbor
+displacements, correlation scores, missing cells, and the overlap policy.
+These are image-registration results and do not verify electrical continuity.
+The edge-to-edge mode remains available explicitly for already-cropped tiles.
+Large output limits and disk-space checks from v1.6 still apply. Import remains
+synchronous and may temporarily block the GUI.
+
+Validation includes synthetic horizontal/vertical overlaps, transverse drift,
+brightness offsets, coarse-to-full-resolution refinement, a consistent 2×2
+grid, periodic ambiguity, textureless tiles, disconnected and inconsistent
+graphs, and BigTIFF pixel/source-preservation checks. The two supplied original
+TIFFs could not be downloaded in the implementation environment, so their
+specific overlap has not yet been measured.

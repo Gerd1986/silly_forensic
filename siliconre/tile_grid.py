@@ -8,8 +8,10 @@ import tifffile
 from PIL import Image
 try:
     from .batch_import import EXTENSIONS
+    from .grid_registration import register_grid
 except ImportError:
     from batch_import import EXTENSIONS
+    from grid_registration import register_grid
 
 PATTERN=re.compile(r"^tile_(\d+)-(\d+)(?:[-_.]|$)",re.IGNORECASE)
 
@@ -52,13 +54,24 @@ def plan_tile_grid(paths,max_pixels=25_000_000_000):
     return {"tiles":mapping,"tile_size":dimensions,"mode":mode,
             "bounds":[r0,r1,c0,c1],"size":[width,height],"missing":missing}
 
-def stitch_tile_grid(paths,output,max_pixels=25_000_000_000):
+def stitch_tile_grid(paths,output,max_pixels=25_000_000_000,align=True):
     plan=plan_tile_grid(paths,max_pixels)
     r0,r1,c0,c1=plan["bounds"]
     tw,th=plan["tile_size"]
-    target=Path(output)
+    positions={(row,col):((col-c0)*tw,(row-r0)*th)
+               for row,col in plan["tiles"]}
+    edges=[]
+    if align:
+        positions,edges=register_grid(plan["tiles"],(tw,th))
+        plan["size"]=[max(x+tw for x,y in positions.values()),
+                      max(y+th for x,y in positions.values())]
+        if plan["size"][0]*plan["size"][1]>max_pixels:
+            raise ValueError("Registered mosaic exceeds output pixel limit")
+    target=Path(output).resolve()
     target.parent.mkdir(parents=True,exist_ok=True)
     temp=target.with_name(target.stem+".partial"+target.suffix)
+    if target in plan["tiles"].values() or temp in plan["tiles"].values():
+        raise ValueError("Output must not overwrite a source tile")
     channels=1 if plan["mode"]=="L" else 3
     shape=(plan["size"][1],plan["size"][0]) if channels==1 else (
         plan["size"][1],plan["size"][0],3)
@@ -75,18 +88,22 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000):
         for (row,col),path in sorted(plan["tiles"].items()):
             with Image.open(path) as im:
                 tile=np.asarray(im.convert(plan["mode"]))
-            y,x=(row-r0)*th,(col-c0)*tw
+            x,y=positions[(row,col)]
             canvas[y:y+th,x:x+tw]=tile
         canvas.flush()
         # Explicitly close the underlying Windows mmap before renaming.
         canvas._mmap.close()
         canvas=None
         temp.replace(target)
-        result={"method":"filename_tile_grid_bigtiff",
+        result={"method":"overlap_tile_grid_bigtiff" if align else "filename_tile_grid_bigtiff",
+                "overlap_policy":"later_row_column_source_wins",
+                "registration_edges":edges,
+                "electrically_verified":False,
                 "row_direction":"increasing_down","column_direction":"increasing_right",
                 "bounds":plan["bounds"],"tile_size":list(plan["tile_size"]),
                 "size":plan["size"],"missing_tiles":[list(rc) for rc in plan["missing"]],
-                "sources":[{"row":row,"column":col,"path":str(path)}
+                "sources":[{"row":row,"column":col,"path":str(path),
+                            "position":list(positions[(row,col)])}
                            for (row,col),path in sorted(plan["tiles"].items())],
                 "output":str(target)}
         target.with_suffix(".sources.json").write_text(

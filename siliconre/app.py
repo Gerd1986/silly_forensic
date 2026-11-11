@@ -191,12 +191,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"Stitch images","Select at least two overlapping images")
             return
         detected=all(parse_tile(path) is not None for path in sources)
-        methods=["Tile grid (filename row-column)","Automatic image matching"]
+        methods=["Tile grid (automatic overlap alignment)",
+                 "Tile grid (edge-to-edge, no overlap)", "Automatic image matching"]
         method,ok=QInputDialog.getItem(self,"Stitching mode","Assembly method:",
-                                      methods,0 if detected else 1,False)
+                                      methods,0 if detected else 2,False)
         if not ok:
             return
-        grid_mode=method==methods[0]
+        grid_mode=method in methods[:2]
+        align_grid=method==methods[0]
         if grid_mode:
             try:
                 preview=plan_tile_grid(sources)
@@ -229,7 +231,7 @@ class MainWindow(QMainWindow):
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result=(stitch_tile_grid(sources,output) if grid_mode
+            result=(stitch_tile_grid(sources,output,align=align_grid) if grid_mode
                     else stitch_images(sources,output))
             with self.db() as db:
                 db.execute("INSERT INTO layers(name,path) VALUES (?,?)",(name,str(output)))

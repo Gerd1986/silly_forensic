@@ -19,7 +19,7 @@ class TileGridTests(unittest.TestCase):
             self.assertEqual(plan["size"],[24,12])
             self.assertEqual(plan["missing"],[(13,18),(14,18),(14,19)])
             target=root/"mosaic.tif"
-            result=stitch_tile_grid(paths,target)
+            result=stitch_tile_grid(paths,target,align=False)
             self.assertEqual(len(result["missing_tiles"]),3)
             # Read through an in-memory buffer: Pillow's TIFF decoder can retain
             # a duplicate OS handle even after Image.close() on Windows.
@@ -31,6 +31,39 @@ class TileGridTests(unittest.TestCase):
             # Assert the mosaic is deletable before TemporaryDirectory cleanup.
             target.unlink()
             self.assertFalse(target.exists())
+    def test_overlap_bigtiff_preserves_geometry_and_source_files(self):
+        import numpy as np
+        import tifffile
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            image=np.random.default_rng(45).integers(0,255,(256,435),dtype=np.uint8)
+            a=root/"Tile_013-011_a.tif"
+            b=root/"Tile_013-012_b.tif"
+            Image.fromarray(image[:,:256]).save(a)
+            Image.fromarray(image[:,179:]).save(b)
+            originals=[a.read_bytes(),b.read_bytes()]
+            output=root/"mosaic.tif"
+            result=stitch_tile_grid([b,a],output)
+            self.assertEqual(result["size"],[435,256])
+            self.assertEqual(result["sources"][1]["position"],[179,0])
+            self.assertGreater(result["registration_edges"][0]["score"],.99)
+            np.testing.assert_array_equal(tifffile.imread(output),image)
+            self.assertEqual([a.read_bytes(),b.read_bytes()], originals)
+            output.unlink()
+
+    def test_uncertain_alignment_writes_no_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            a=root/"Tile_001-001_a.tif"
+            b=root/"Tile_001-002_b.tif"
+            Image.new("L",(128,128),100).save(a)
+            Image.new("L",(128,128),100).save(b)
+            output=root/"mosaic.tif"
+            with self.assertRaises(ValueError):
+                stitch_tile_grid([a,b],output)
+            self.assertFalse(output.exists())
+            self.assertFalse(output.with_suffix(".sources.json").exists())
+
     def test_duplicate_coordinate(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
