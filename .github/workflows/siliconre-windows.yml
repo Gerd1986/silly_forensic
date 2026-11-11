@@ -1,12 +1,23 @@
-name: SiliconRE Windows build
+name: SiliconRE Windows build and release
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub release after successful build'
+        type: boolean
+        default: false
+      version:
+        description: 'Release tag (e.g. v0.1.0)'
+        type: string
+        default: 'v0.1.0'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
       - 'siliconre/**'
       - 'requirements.txt'
       - '.github/workflows/siliconre-windows.yml'
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -30,3 +41,26 @@ jobs:
         with:
           name: SiliconRE-Windows-x64
           path: SiliconRE-Windows-x64.zip
+      - name: Validate release tag
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+        shell: pwsh
+        run: |
+          if ('${{ inputs.version }}' -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.1.0' }
+      - name: Publish GitHub release
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.version }}
+        shell: pwsh
+        run: |
+          $notes = @'
+          SiliconRE initial Windows prototype.
+          - SEM layer viewer, markers and SQLite projects
+          - Zoom-dependent TIFF rendering, layer overlay and alignment
+          - Local read-only MCP interface
+          - Experimental libvips integration (native DLLs not bundled)
+          
+          This is a preview build. Validate with your own SEM data.
+          '@
+          $notes | Set-Content -Path release-notes.md -Encoding utf8
+          gh release create "$env:TAG" SiliconRE-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
