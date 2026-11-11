@@ -26,7 +26,8 @@ from devices import add_device, list_devices, resolve_devices, spice_netlist
 from mos_detection import detect_mos_candidates, ensure_mos_candidate_schema, list_mos_candidates
 from debug_ports import analyze_debug_interfaces
 from logic_analysis import KINDS, PINS, add_logic_cell, resolved_cells, analyze_sequential
-from batch_import import images_in_folder, plan_import
+from batch_import import images_in_folder
+from stitching import stitch_images
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -83,7 +84,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.3 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.4 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -107,9 +108,8 @@ class MainWindow(QMainWindow):
         for title, callback in [
             ("New project", self.new_project),
             ("Open project", self.open_project),
-            ("Add SEM image", self.import_image),
-            ("Add multiple SEM images", self.import_images),
-            ("Import image folder", self.import_folder),
+            ("Stitch selected SEM images", self.import_images),
+            ("Stitch SEM image folder", self.import_folder),
             ("Mark point", self.toggle_mark),
             ("Overlay layer", self.choose_overlay),
             ("Align overlay (dx,dy)", self.align_overlay),
@@ -181,46 +181,56 @@ class MainWindow(QMainWindow):
             for (name,) in db.execute("SELECT name FROM layers ORDER BY name"):
                 self.layers.addItem(name)
 
-    def import_image(self):
-        if not self.project:
-            QMessageBox.information(self, "Project required", "Create or open a project first")
-            return
-        path, _ = QFileDialog.getOpenFileName(self, "SEM image", "", "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
-        if not path:
-            return
-        name, ok = QInputDialog.getText(self, "Layer name", "Layer (e.g. M1, VIA1, POLY):")
-        if not ok or not name.strip():
-            return
-        with self.db() as db:
-            db.execute("INSERT OR REPLACE INTO layers(name,path) VALUES (?,?)", (name.strip(), path))
-        self.refresh_layers()
-        self.layers.setCurrentRow(self.layers.count()-1)
-
     def _import_many(self, paths):
         if not self.project:
             QMessageBox.information(self,"Project required","Create or open a project first")
             return
-        with self.db() as db:
-            existing=[row[0] for row in db.execute("SELECT name FROM layers")]
-            planned=plan_import(paths,existing)
-        if not planned:
-            QMessageBox.information(self,"Batch import","No supported images found")
+        sources=[str(Path(p).resolve()) for p in paths]
+        if len(sources)<2:
+            QMessageBox.warning(self,"Stitch images","Select at least two overlapping images")
             return
-        confirmation=QMessageBox.question(self,"Import SEM images",
-            f"Import {len(planned)} images?\nNames are derived from filenames. Existing layers are preserved.")
-        if confirmation!=QMessageBox.StandardButton.Yes:
+        name,ok=QInputDialog.getText(self,"Stitch images","New layer name (e.g. M1):")
+        if not ok or not name.strip():
             return
+        name=name.strip()
         with self.db() as db:
-            db.executemany("INSERT INTO layers(name,path) VALUES (?,?)",planned)
+            if db.execute("SELECT 1 FROM layers WHERE name=? COLLATE NOCASE",(name,)).fetchone():
+                QMessageBox.warning(self,"Stitch images","Layer name already exists")
+                return
+        output_dir=self.project/"stitched_layers"
+        output_dir.mkdir(parents=True,exist_ok=True)
+        import re
+        safe=re.sub(r"[^A-Za-z0-9_-]+","_",name).strip("_") or "layer"
+        output=output_dir/(safe+".tif")
+        if output.exists():
+            QMessageBox.warning(self,"Stitch images","Output filename already exists")
+            return
+        if QMessageBox.question(self,"Stitch images",
+            f"Automatically align and stitch {len(sources)} overlapping images into one layer '{name}'?\n"
+            "This may take time. If alignment fails, no layer will be created.")!=QMessageBox.StandardButton.Yes:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result=stitch_images(sources,output)
+            with self.db() as db:
+                db.execute("INSERT INTO layers(name,path) VALUES (?,?)",(name,str(output)))
+        except Exception as exc:
+            QMessageBox.warning(self,"Stitch images",str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
         self.refresh_layers()
-        self.layers.setCurrentRow(self.layers.count()-1)
-        self.statusBar().showMessage(f"Imported {len(planned)} SEM images")
+        matches=self.layers.findItems(name,Qt.MatchFlag.MatchExactly)
+        if matches:
+            self.layers.setCurrentItem(matches[0])
+        self.statusBar().showMessage(
+            f"Stitched {len(sources)} images into {name}: {result['size'][0]} x {result['size'][1]}")
 
     def import_images(self):
         if not self.project:
             QMessageBox.information(self,"Project required","Create or open a project first")
             return
-        paths,_=QFileDialog.getOpenFileNames(self,"Select SEM images","",
+        paths,_=QFileDialog.getOpenFileNames(self,"Select overlapping SEM images","",
                             "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp)")
         if paths:
             self._import_many(paths)
@@ -232,14 +242,14 @@ class MainWindow(QMainWindow):
         folder=QFileDialog.getExistingDirectory(self,"Select SEM image folder")
         if not folder:
             return
-        recursive=QMessageBox.question(self,"Folder import",
+        recursive=QMessageBox.question(self,"Folder stitching",
             "Include images in subfolders too?",
             QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes
         try:
             self._import_many(images_in_folder(folder,recursive))
         except (ValueError,OSError) as exc:
-            QMessageBox.warning(self,"Folder import",str(exc))
+            QMessageBox.warning(self,"Folder stitching",str(exc))
 
     def select_layer(self, name):
         if not name or not self.project:
