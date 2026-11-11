@@ -14,6 +14,7 @@ on:
     branches: [feature/siliconre-v0.1]
     paths:
       - 'siliconre/**'
+      - 'tests/**'
       - 'requirements.txt'
       - '.github/workflows/siliconre-windows.yml'
 permissions:
@@ -32,6 +33,8 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
       - name: Compile Python files
         run: python -m compileall -q siliconre
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
       - name: Build portable application
         run: pyinstaller --noconfirm --clean --onedir --windowed --name SiliconRE --paths siliconre siliconre/app.py
       - name: Build standalone MCP server
