@@ -28,5 +28,23 @@ def list_annotations(layer: str) -> list[dict]:
                 for ident, x, y, label in db.execute(
                     "SELECT id,x,y,label FROM markers WHERE layer=?", (layer,))]
 
+@server.tool()
+def list_trace_candidates(layer: str, status: str = "") -> list[dict]:
+    """List reviewed SEM candidate boxes; status can be candidate, accepted, rejected, or empty for all."""
+    if status not in ("", "candidate", "accepted", "rejected"):
+        raise ValueError("Invalid status")
+    with connect() as db:
+        table = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trace_candidates'").fetchone()
+        if not table:
+            return []
+        sql = "SELECT id,layer,x,y,width,height,status FROM trace_candidates WHERE layer=?"
+        params = [layer]
+        if status:
+            sql += " AND status=?"
+            params.append(status)
+        sql += " ORDER BY id"
+        return [dict(zip(("id","layer","x","y","width","height","status"), row))
+                for row in db.execute(sql, params)]
+
 if __name__ == "__main__":
     server.run(transport="stdio")
