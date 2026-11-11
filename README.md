@@ -29,3 +29,11 @@ Prototype, not yet tested on Windows. The viewer renders visible 512px tiles wit
 
 ## Layer overlay and alignment
 Select a base layer, click **Overlay layer**, and choose another layer. Adjust transparency with the right-hand slider. Click **Align overlay (dx,dy)** to set and persist a translation in pixel coordinates. This is manual translation only, not automatic feature registration, rotation, or affine correction.
+
+## Experimental auto-registration
+Choose a base layer and an overlay, then click **Auto-align overlay**. OpenCV phase correlation estimates a translation only, using previews. The images must have identical dimensions, orientation, and scale. Inspect results manually; repeating chip patterns can yield incorrect offsets. A weak response is rejected.
+
+## TIFF pyramids
+**Build TIFF pyramid** writes a tiled, multiresolution TIFF using optional `pyvips` and a separately installed Windows libvips runtime. The source is not overwritten. Pyramid generation currently runs synchronously and may freeze the UI for large files. The current viewer does **not yet select the best pyramid level**; it still uses Pillow tile crops. True level-aware viewing is a separate next milestone.
+
+Install optional support with `py -m pip install pyvips` and install libvips for Windows.
