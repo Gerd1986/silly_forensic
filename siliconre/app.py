@@ -24,6 +24,7 @@ from reconstruction import associate_via_trace, connect_vias, reconstruct, expor
 from via_matching import suggest_via_pairs
 from devices import add_device, list_devices, resolve_devices, spice_netlist
 from mos_detection import detect_mos_candidates, ensure_mos_candidate_schema, list_mos_candidates
+from debug_ports import analyze_debug_interfaces
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -80,7 +81,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.1 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.2 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -132,6 +133,7 @@ class MainWindow(QMainWindow):
             ("Detect MOS candidates", self.detect_mos),
             ("Review MOS candidate", self.review_mos),
             ("Export MOS candidates JSON", self.export_mos_candidates),
+            ("Analyze debug port clues", self.analyze_ports),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -763,6 +765,28 @@ class MainWindow(QMainWindow):
         with open(path,"w",encoding="utf-8") as stream:
             json.dump({"verified_transistors":False,"candidates":rows},stream,indent=2)
         self.statusBar().showMessage(f"Exported {len(rows)} MOS candidates")
+
+    def analyze_ports(self):
+        if not self.project:
+            return
+        with self.db() as db:
+            findings=analyze_debug_interfaces(db)
+        if not findings:
+            QMessageBox.information(self,"Debug ports","No recognized signal labels found. Annotate points with TCK/TMS/TDI/TDO, SWCLK/SWDIO, etc.")
+            return
+        lines=[]
+        for finding in findings:
+            lines.append(f"{finding['protocol']}: {len(finding['matched_signals'])}/{len(finding['required_signals'])} required labels")
+            lines.append("  Matched: "+", ".join(finding["matched_signals"]))
+            lines.append("  Missing: "+(", ".join(finding["missing_signals"]) or "none"))
+        QMessageBox.information(self,"Debug port hypotheses","\n".join(lines[:45])+
+            "\n\nLabel-based hypotheses only; NOT confirmed port identification.")
+        path,_=QFileDialog.getSaveFileName(self,"Export debug port evidence",
+                        str(self.project/"debug_port_hypotheses.json"),"JSON (*.json)")
+        if path:
+            with open(path,"w",encoding="utf-8") as stream:
+                json.dump({"verified":False,"method":"marker label matching","findings":findings},
+                          stream,indent=2)
 
     def update_opacity(self, value):
         if self.viewer.overlay:
