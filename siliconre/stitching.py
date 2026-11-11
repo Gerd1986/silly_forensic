@@ -8,7 +8,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
-from .batch_import import EXTENSIONS
+try:
+    from .batch_import import EXTENSIONS
+except ImportError:
+    from batch_import import EXTENSIONS
 
 def stitch_images(paths,output,mode="scans",max_input_pixels=24_000_000,
                   max_output_pixels=120_000_000):
