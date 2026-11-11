@@ -53,3 +53,9 @@ From **Actions → SiliconRE Windows build and release → Run workflow**, choos
 
 ## v0.2 experimental trace candidates
 The **Detect trace candidates** toolbar action segments the currently visible region using Otsu or a manually selected grayscale threshold, a small morphological opening, and connected-component analysis. Results can be exported to JSON with bounding boxes and centroids. Limitations: foreground polarity is currently bright-on-dark, results are unverified visual candidates (not nets), and the processing path uses Pillow and may decode large TIFFs. Zoom into a region under 12 MP before running. No automatic electrical net tracing or transistor recognition is claimed.
+
+## v0.2 candidate review
+After **Detect trace candidates**, bounding boxes appear directly over the SEM layer: cyan = candidate, green = accepted, red = rejected. Select one or more boxes and use **Accept selected**, **Reject selected**, or **Delete selected**. Drag a box to correct its position; its position and review state are saved to SQLite and restored on reopening the layer. This is bounding-box editing only; resizing, contour editing, verified electrical connectivity, and automated net tracing remain future work.
+
+## v0.2 release
+In GitHub Actions run **SiliconRE Windows build and release** on `feature/siliconre-v0.1` with `publish_release=true` and `version=v0.2.0`. The workflow publishes a prerelease only if the Windows build succeeds. Confirm the build result and ZIP before relying on the release.
