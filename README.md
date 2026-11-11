@@ -25,4 +25,7 @@ Set `SILICONRE_PROJECT` to the folder containing `project.sqlite3`. Configure yo
 
 ## Current limitations
 
-Prototype, not yet tested on Windows. Qt currently decodes entire images into memory; tiled/pyramid viewing is planned for large SEM datasets. Images are referenced by absolute paths. Layer alignment, segmentation, via detection, transistor recognition and netlist extraction are not yet implemented.
+Prototype, not yet tested on Windows. The viewer renders visible 512px tiles with a bounded cache; Pillow may still decode full compressed TIFF images internally. Multiresolution pyramids remain planned. Images are referenced by absolute paths. Layer alignment, segmentation, via detection, transistor recognition and netlist extraction are not yet implemented.
+
+## Layer overlay and alignment
+Select a base layer, click **Overlay layer**, and choose another layer. Adjust transparency with the right-hand slider. Click **Align overlay (dx,dy)** to set and persist a translation in pixel coordinates. This is manual translation only, not automatic feature registration, rotation, or affine correction.
