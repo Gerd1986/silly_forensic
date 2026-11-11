@@ -1,0 +1,107 @@
+name: SiliconRE Windows build and release
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub release after successful build'
+        type: boolean
+        default: false
+      version:
+        description: 'Release tag (e.g. v1.9.1)'
+        type: string
+        default: 'v1.9.1'
+  push:
+    branches: [feature/siliconre-v0.1]
+    paths:
+      - 'siliconre/**'
+      - 'tests/**'
+      - 'requirements.txt'
+      - '.github/workflows/siliconre-windows.yml'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Compile Python files
+        run: python -m compileall -q siliconre
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Build portable application
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name SiliconRE --paths siliconre siliconre/app.py
+      - name: Build standalone MCP server
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --paths siliconre --collect-submodules mcp.server --collect-submodules mcp.shared --collect-data mcp --collect-submodules pydantic --collect-submodules pydantic_core siliconre/mcp_server.py
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller MCP build failed" }
+          if (-not (Test-Path 'dist/SiliconRE-MCP/SiliconRE-MCP.exe')) { throw "MCP executable missing" }
+      - name: Archive application
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/SiliconRE -DestinationPath SiliconRE-Windows-x64.zip
+          Compress-Archive -Path dist/SiliconRE-MCP -DestinationPath SiliconRE-MCP-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiliconRE-Windows-x64
+          path: |
+            SiliconRE-Windows-x64.zip
+            SiliconRE-MCP-Windows-x64.zip
+      - name: Validate release tag
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        shell: pwsh
+        env:
+          TAG: ${{ github.event_name == 'push' && 'v1.9.1' || inputs.version }}
+        run: |
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.9.1' }
+      - name: Publish GitHub release
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && 'v1.9.1' || inputs.version }}
+        shell: pwsh
+        run: |
+          $notes = @'
+          SiliconRE v1.9.1 preview.
+          - SEM viewer, annotations and project database
+          - Editable trace candidates, review status, resizing and CSV export
+          - Manual visual links between accepted candidates and JSON net-group export
+          - Experimental via-like circular feature detection, review, JSON export and MCP access
+          - Manual cross-layer via-to-trace connectivity and reconstructed net groups
+          - Registration-aware via pairing proposals requiring human confirmation
+          - Structural Verilog and VHDL exports with manually annotated MOS primitives
+          - User-annotated NMOS/PMOS G/D/S/B terminal mapping and SPICE export
+          - Experimental POLY/ACTIVE crossing detector with human review and MCP access
+          - Multi-protocol debug-port evidence analyzer (JTAG, SWD, cJTAG, UART, SPI, I2C, SWIM, BDM, Nexus)
+          - Manually annotated logic cells and DFF clock/shift-chain structural hypotheses
+          - Automatic overlapping SEM image stitching into one TIFF mosaic per layer
+          - Whole-area intensity/detail correlation instead of narrow edge-strip matching
+          - Shared acquisition grid steps, calibrated standard TIFF positions, known overlap input
+          - Overlap-aware Tile_ROW-COL stitching with original-resolution refinement and quality checks
+          - Recorded tile positions, overlap scores, ambiguity rejection and global grid consistency
+          - Disk-backed BigTIFF assembly for multi-gigapixel SEM mosaics
+          - Memory-mapped virtual pyramid viewer for giant TIFF images
+          - BigTIFF-safe bounded ROI reading for trace, via and MOS detection
+          - MCP access to annotated transistor netlists
+          - MCP tools for manual links and connected groups
+          - Layer overlay and manual/automatic translation registration
+          - Zoom-dependent TIFF rendering and optional libvips reader
+          - Separate portable Windows MCP server executable with trace candidate queries
+          
+          Experimental preview. Validate with your own SEM images.
+          '@
+          $notes | Set-Content -Path release-notes.md -Encoding utf8
+          gh release view "$env:TAG" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG already exists; skipping duplicate publication"
+            exit 0
+          }
+          gh release create "$env:TAG" SiliconRE-Windows-x64.zip SiliconRE-MCP-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }
