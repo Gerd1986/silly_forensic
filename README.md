@@ -212,3 +212,11 @@ steps and calibrated TIFF positions on periodic textures, shared grid
 disambiguation, genuinely ambiguous shared steps, and more than 16 maxima.
 The supplied original TIFFs could not be downloaded in this environment;
 their actual private metadata and scan pitch remain unverified.
+
+### v1.9.1 large-tile coarse-search correction
+
+The coarse-search threshold accounts for sampling-phase differences introduced
+when large tiles are reduced for FFT matching. Every accepted displacement must
+still pass the original-resolution feature-correlation threshold. A regression
+uses 4096-pixel-wide sources shifted by 3001 pixels horizontally and 3 pixels
+vertically, recovering the exact original-resolution displacement.

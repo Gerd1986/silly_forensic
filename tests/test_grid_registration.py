@@ -147,6 +147,16 @@ class RegistrationTests(unittest.TestCase):
         scores[::5,::5]=.97
         self.assertEqual(len(_candidate_peaks(scores,1,.72)),36)
 
+    def test_4096_pixel_subsample_phase_recovers_original_translation(self):
+        from PIL import ImageFilter
+        noise=self.rng.integers(0,255,(700,7100),dtype=np.uint8)
+        source=np.asarray(Image.fromarray(noise).filter(ImageFilter.GaussianBlur(2)))
+        a=self.save(source[:640,:4096],"a")
+        b=self.save(source[3:643,3001:7097],"b")
+        match=estimate_translation(a,b,"horizontal")
+        self.assertEqual((match["dx"],match["dy"]),(3001,3))
+        self.assertGreater(match["score"],.99)
+
     def test_no_overlap_rejected(self):
         a = self.save(self.rng.integers(0,255,(128,128),dtype=np.uint8), "a")
         b = self.save(self.rng.integers(0,255,(128,128),dtype=np.uint8), "b")

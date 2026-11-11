@@ -151,10 +151,11 @@ def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candid
     raw=_whole_overlap_scores(aa,bb,dxs,dys)
     da,db=_detail(aa),_detail(bb)
     scores=.35*raw+.65*_whole_overlap_scores(da,db,dxs,dys)
-    if np.max(scores)<min_score:
+    coarse_threshold=max(.25,min_score/(1+.5*(scale-1)))
+    if np.max(scores)<coarse_threshold:
         raise ValueError(f"Weak {axis} overlap: {Path(first).name} -> {Path(second).name} "
                          f"(whole-area feature NCC {float(scores.max()):.3f})")
-    peaks=_candidate_peaks(scores,max(2,int(ww*.003)),min_score)
+    peaks=_candidate_peaks(scores,max(2,int(ww*.003)),coarse_threshold)
     # The entire overlap has already been scored for every coarse lag. Only
     # leading distinct maxima need the expensive original-resolution refinement.
     detail_a,detail_b=_detail(a),_detail(b)
