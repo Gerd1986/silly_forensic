@@ -14,13 +14,20 @@ class TiledImage(QGraphicsItem):
     def __init__(self, filename):
         super().__init__()
         self.filename = str(filename)
-        self.source = Image.open(self.filename)
+        self.vips = None
+        if self.filename.lower().endswith((".tif", ".tiff")):
+            try:
+                from vips_reader import VipsReader
+                self.vips = VipsReader(self.filename)
+            except (ImportError, OSError):
+                pass
+        self.source = None if self.vips else Image.open(self.filename)
         self.levels = []
         # Pillow exposes pyramidal TIFF IFDs as frames for common TIFF layouts.
         # Only strictly smaller frames are treated as reduced-resolution levels.
-        base = self.source.size
+        base = (self.vips.width, self.vips.height) if self.vips else self.source.size
         self.width, self.height = base
-        for index in range(getattr(self.source, "n_frames", 1)):
+        for index in range(0 if self.vips else getattr(self.source, "n_frames", 1)):
             self.source.seek(index)
             w, h = self.source.size
             if w <= base[0] and h <= base[1] and (w, h) not in [size for _, size in self.levels]:
@@ -28,7 +35,10 @@ class TiledImage(QGraphicsItem):
         self.levels.sort(key=lambda item: item[1][0], reverse=True)
         if not self.levels or self.levels[0][1] != base:
             self.levels.insert(0, (0, base))
-        self.source.seek(0)
+        if self.source:
+            self.source.seek(0)
+        if self.vips:
+            self.levels = [(index, (w, h)) for index, (_, w, h) in enumerate(self.vips.levels)]
         self.cache = OrderedDict()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
@@ -49,9 +59,17 @@ class TiledImage(QGraphicsItem):
         if key in self.cache:
             self.cache.move_to_end(key)
             return self.cache[key]
+        x, y = col*TILE, row*TILE
+        if self.vips:
+            raw, width, height, channels = self.vips.crop(frame, x, y, TILE, TILE)
+            fmt = QImage.Format.Format_RGBA8888 if channels == 4 else QImage.Format.Format_RGB888
+            pix = QPixmap.fromImage(QImage(raw, width, height, width*channels, fmt).copy())
+            self.cache[key] = pix
+            if len(self.cache) > MAX_TILES:
+                self.cache.popitem(last=False)
+            return pix
         self.source.seek(frame)
         w, h = self.source.size
-        x, y = col*TILE, row*TILE
         im = self.source.crop((x, y, min(x+TILE, w), min(y+TILE, h)))
         if im.mode not in ("RGB", "RGBA"):
             im = ImageOps.autocontrast(im.convert("L")).convert("RGB")
@@ -85,5 +103,8 @@ class TiledImage(QGraphicsItem):
         painter.restore()
 
     def close(self):
-        self.source.close()
+        if self.source:
+            self.source.close()
+        if self.vips:
+            self.vips.close()
         self.cache.clear()
