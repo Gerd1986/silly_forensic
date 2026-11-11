@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v0.3.1)'
+        description: 'Release tag (e.g. v0.4.0)'
         type: string
-        default: 'v0.3.1'
+        default: 'v0.4.0'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
@@ -37,7 +37,7 @@ jobs:
       - name: Build standalone MCP server
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --collect-submodules mcp.server --collect-submodules mcp.shared --collect-data mcp --collect-submodules pydantic --collect-submodules pydantic_core siliconre/mcp_server.py
+          python -m PyInstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --paths siliconre --collect-submodules mcp.server --collect-submodules mcp.shared --collect-data mcp --collect-submodules pydantic --collect-submodules pydantic_core siliconre/mcp_server.py
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller MCP build failed" }
           if (-not (Test-Path 'dist/SiliconRE-MCP/SiliconRE-MCP.exe')) { throw "MCP executable missing" }
       - name: Archive application
@@ -55,20 +55,22 @@ jobs:
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v0.3.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.4.0' || inputs.version }}
         run: |
           if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.3.0' }
       - name: Publish GitHub release
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v0.3.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.4.0' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v0.3 preview.
+          SiliconRE v0.4 preview.
           - SEM viewer, annotations and project database
           - Editable trace candidates, review status, resizing and CSV export
+          - Manual visual links between accepted candidates and JSON net-group export
+          - MCP tools for manual links and connected groups
           - Layer overlay and manual/automatic translation registration
           - Zoom-dependent TIFF rendering and optional libvips reader
           - Separate portable Windows MCP server executable with trace candidate queries
