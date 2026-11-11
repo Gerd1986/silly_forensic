@@ -1,4 +1,5 @@
 import tempfile
+from io import BytesIO
 import unittest
 from pathlib import Path
 from PIL import Image
@@ -20,11 +21,16 @@ class TileGridTests(unittest.TestCase):
             target=root/"mosaic.tif"
             result=stitch_tile_grid(paths,target)
             self.assertEqual(len(result["missing_tiles"]),3)
-            with Image.open(target) as im:
+            # Read through an in-memory buffer: Pillow's TIFF decoder can retain
+            # a duplicate OS handle even after Image.close() on Windows.
+            with Image.open(BytesIO(target.read_bytes())) as im:
                 self.assertEqual(im.getpixel((1,1)),10)
                 self.assertEqual(im.getpixel((9,1)),127)
                 self.assertEqual(im.getpixel((17,1)),30)
                 self.assertEqual(im.getpixel((1,7)),50)
+            # Assert the mosaic is deletable before TemporaryDirectory cleanup.
+            target.unlink()
+            self.assertFalse(target.exists())
     def test_duplicate_coordinate(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
