@@ -1,4 +1,5 @@
 """SiliconRE SEM delayering desktop viewer (prototype)."""
+import csv
 import json
 import sqlite3
 import sys
@@ -73,7 +74,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 0.2 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 0.3 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
             ("Accept selected", lambda: self.review_selected("accepted")),
             ("Reject selected", lambda: self.review_selected("rejected")),
             ("Delete selected", self.delete_selected),
+            ("Resize selected", self.resize_selected),
+            ("Export candidates CSV", self.export_candidates),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -302,6 +305,39 @@ class MainWindow(QMainWindow):
             for item in items:
                 db.execute("DELETE FROM trace_candidates WHERE id=? AND layer=?", (item.row_id, item.layer))
                 self.viewer.scene_.removeItem(item)
+
+    def resize_selected(self):
+        items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
+        if len(items) != 1:
+            QMessageBox.information(self, "Resize", "Select exactly one candidate rectangle")
+            return
+        item = items[0]
+        width, ok = QInputDialog.getDouble(self, "Resize candidate", "Width (pixels):", item.rect().width(), 1, 1000000, 1)
+        if not ok:
+            return
+        height, ok = QInputDialog.getDouble(self, "Resize candidate", "Height (pixels):", item.rect().height(), 1, 1000000, 1)
+        if not ok:
+            return
+        item.setRect(0, 0, width, height)
+        self.save_candidate(item)
+
+    def export_candidates(self):
+        if not self.current_layer:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export candidates CSV",
+                                              str(self.project / (self.current_layer + "_candidates.csv")),
+                                              "CSV (*.csv)")
+        if not path:
+            return
+        with self.db() as db:
+            ensure_schema(db)
+            rows = db.execute("SELECT id,layer,x,y,width,height,status FROM trace_candidates WHERE layer=? ORDER BY id",
+                              (self.current_layer,)).fetchall()
+        with open(path, "w", newline="", encoding="utf-8-sig") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(("id", "layer", "x", "y", "width", "height", "status"))
+            writer.writerows(rows)
+        self.statusBar().showMessage(f"Exported {len(rows)} candidates to {path}")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
