@@ -25,6 +25,7 @@ from via_matching import suggest_via_pairs
 from devices import add_device, list_devices, resolve_devices, spice_netlist
 from mos_detection import detect_mos_candidates, ensure_mos_candidate_schema, list_mos_candidates
 from debug_ports import analyze_debug_interfaces
+from logic_analysis import KINDS, PINS, add_logic_cell, resolved_cells, analyze_sequential
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -81,7 +82,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.2 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.3 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -134,6 +135,8 @@ class MainWindow(QMainWindow):
             ("Review MOS candidate", self.review_mos),
             ("Export MOS candidates JSON", self.export_mos_candidates),
             ("Analyze debug port clues", self.analyze_ports),
+            ("Annotate logic cell", self.annotate_logic),
+            ("Analyze sequential logic", self.analyze_logic),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -787,6 +790,54 @@ class MainWindow(QMainWindow):
             with open(path,"w",encoding="utf-8") as stream:
                 json.dump({"verified":False,"method":"marker label matching","findings":findings},
                           stream,indent=2)
+
+    def annotate_logic(self):
+        if not self.project or not self.current_layer:
+            return
+        with self.db() as db:
+            choices=[str(r[0]) for r in db.execute(
+                "SELECT id FROM trace_candidates WHERE status='accepted' ORDER BY id")]
+        if not choices:
+            QMessageBox.information(self,"Logic annotation","Accept trace candidates first")
+            return
+        name,ok=QInputDialog.getText(self,"Logic annotation","Cell name:")
+        if not ok:
+            return
+        kind,ok=QInputDialog.getItem(self,"Logic annotation","Cell type:",list(KINDS),0,False)
+        if not ok:
+            return
+        pins={}
+        for pin in PINS[kind]:
+            chosen,ok=QInputDialog.getItem(self,"Logic annotation",f"{pin} trace ID:",choices,0,False)
+            if not ok:
+                return
+            pins[pin]=int(chosen)
+        try:
+            with self.db() as db:
+                add_logic_cell(db,name,kind,self.current_layer,pins)
+            self.statusBar().showMessage(f"Annotated {kind} {name} (manual evidence)")
+        except (ValueError,sqlite3.IntegrityError) as exc:
+            QMessageBox.warning(self,"Logic annotation",str(exc))
+
+    def analyze_logic(self):
+        if not self.project:
+            return
+        with self.db() as db:
+            result=analyze_sequential(db)
+        groups=result["clock_groups"]
+        chains=result["shift_register_candidates"]
+        states=result["tap_state_register_candidates"]
+        summary=(f"Annotated cells: {len(result['cells'])}\n"
+                 f"DFF clock groups: {len(groups)}\n"
+                 f"Possible shift-register chains: {len(chains)}\n"
+                 f"Possible four-bit state registers: {len(states)}\n\n"
+                 "A JTAG TAP is NOT verified; transition logic is not yet evaluated.")
+        QMessageBox.information(self,"Sequential logic analysis",summary)
+        path,_=QFileDialog.getSaveFileName(self,"Export sequential evidence",
+                      str(self.project/"sequential_analysis.json"),"JSON (*.json)")
+        if path:
+            with open(path,"w",encoding="utf-8") as stream:
+                json.dump(result,stream,indent=2)
 
     def update_opacity(self, value):
         if self.viewer.overlay:
