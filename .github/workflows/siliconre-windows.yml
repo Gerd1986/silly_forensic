@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v0.2.0)'
+        description: 'Release tag (e.g. v0.3.0)'
         type: string
-        default: 'v0.2.0'
+        default: 'v0.3.0'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
@@ -42,12 +42,12 @@ jobs:
           name: SiliconRE-Windows-x64
           path: SiliconRE-Windows-x64.zip
       - name: Validate release tag
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.3.0' || inputs.version }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.2.0' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.3.0' }
       - name: Publish GitHub release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
         env:
@@ -56,8 +56,8 @@ jobs:
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v0.2 preview.
-          - SEM viewer, annotations and project database
+          SiliconRE v0.3 preview.
+          - SEM viewer, annotations and project database\n          - Editable trace candidates, review status, resizing and CSV export
           - Layer overlay and manual/automatic translation registration
           - Zoom-dependent TIFF rendering and optional libvips reader
           - Windows portable executable and read-only MCP interface
@@ -65,4 +65,10 @@ jobs:
           Experimental preview. Validate with your own SEM images.
           '@
           $notes | Set-Content -Path release-notes.md -Encoding utf8
+          gh release view "$env:TAG" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG already exists; skipping duplicate publication"
+            exit 0
+          }
           gh release create "$env:TAG" SiliconRE-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }
