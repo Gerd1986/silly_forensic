@@ -16,6 +16,7 @@ from tiles import TiledImage
 from registration import estimate_translation
 from pyramid import build_pyramid
 from traces import detect_traces
+from candidates import CandidateRect, ensure_schema
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -72,7 +73,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 0.1 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 0.2 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -103,6 +104,9 @@ class MainWindow(QMainWindow):
             ("Auto-align overlay", self.auto_align_overlay),
             ("Build TIFF pyramid", self.create_pyramid),
             ("Detect trace candidates", self.detect_candidates),
+            ("Accept selected", lambda: self.review_selected("accepted")),
+            ("Reject selected", lambda: self.review_selected("rejected")),
+            ("Delete selected", self.delete_selected),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -122,6 +126,7 @@ class MainWindow(QMainWindow):
             db.execute("CREATE TABLE IF NOT EXISTS layers (name TEXT PRIMARY KEY, path TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY, layer TEXT, x REAL, y REAL, label TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS alignments (base TEXT, overlay TEXT, dx REAL, dy REAL, PRIMARY KEY(base,overlay))")
+            ensure_schema(db)
         self.refresh_layers()
 
     def open_project(self):
@@ -164,6 +169,8 @@ class MainWindow(QMainWindow):
         with self.db() as db:
             row = db.execute("SELECT path FROM layers WHERE name=?", (name,)).fetchone()
             markers = db.execute("SELECT x,y,label FROM markers WHERE layer=?", (name,)).fetchall()
+            ensure_schema(db)
+            candidates = db.execute("SELECT id,layer,x,y,width,height,status FROM trace_candidates WHERE layer=?", (name,)).fetchall()
         if not row:
             return
         try:
@@ -172,6 +179,8 @@ class MainWindow(QMainWindow):
             self.overlay_layer = None
             for x,y,label in markers:
                 self.viewer.draw_marker(x,y,label)
+            for candidate in candidates:
+                self.show_candidate(candidate)
             self.statusBar().showMessage(name + " — " + row[0])
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
@@ -260,13 +269,39 @@ class MainWindow(QMainWindow):
             return
         try:
             regions = detect_traces(image_path, (x, y, width, height), threshold)
-            export, _ = QFileDialog.getSaveFileName(self, "Export trace candidates", str(self.project / (self.current_layer + "_candidates.json")), "JSON (*.json)")
-            if export:
-                with open(export, "w", encoding="utf-8") as out:
-                    json.dump({"layer": self.current_layer, "roi": [x,y,width,height], "candidates": regions}, out, indent=2)
+            with self.db() as db:
+                ensure_schema(db)
+                for region in regions:
+                    cursor = db.execute(
+                        "INSERT INTO trace_candidates(layer,x,y,width,height,status) VALUES (?,?,?,?,?,?)",
+                        (self.current_layer, region["x"], region["y"], region["width"], region["height"], "candidate"))
+                    self.show_candidate((cursor.lastrowid, self.current_layer, region["x"], region["y"],
+                                         region["width"], region["height"], "candidate"))
             self.statusBar().showMessage(f"{len(regions)} unverified trace candidates in visible region")
         except Exception as exc:
             QMessageBox.warning(self, "Trace detection failed", str(exc))
+
+    def show_candidate(self, row):
+        item = CandidateRect(*row, self.save_candidate)
+        self.viewer.scene_.addItem(item)
+
+    def save_candidate(self, item):
+        with self.db() as db:
+            db.execute("UPDATE trace_candidates SET x=?,y=?,width=?,height=?,status=? WHERE id=? AND layer=?",
+                       (item.pos().x(), item.pos().y(), item.rect().width(), item.rect().height(),
+                        item.status, item.row_id, item.layer))
+
+    def review_selected(self, status):
+        for item in self.viewer.scene_.selectedItems():
+            if isinstance(item, CandidateRect):
+                item.set_status(status)
+
+    def delete_selected(self):
+        items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
+        with self.db() as db:
+            for item in items:
+                db.execute("DELETE FROM trace_candidates WHERE id=? AND layer=?", (item.row_id, item.layer))
+                self.viewer.scene_.removeItem(item)
 
     def update_opacity(self, value):
         if self.viewer.overlay:
