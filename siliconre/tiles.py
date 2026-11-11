@@ -74,6 +74,8 @@ class TiledImage(QGraphicsItem):
         if self.vips or self.bigreader:
             raw, width, height, channels = (self.bigreader.crop(frame,x,y,TILE,TILE)
                                            if self.bigreader else self.vips.crop(frame,x,y,TILE,TILE))
+            if channels not in (3,4) or len(raw) != width*height*channels:
+                raise ValueError("Invalid display tile buffer dimensions")
             fmt = QImage.Format.Format_RGBA8888 if channels == 4 else QImage.Format.Format_RGB888
             pix = QPixmap.fromImage(QImage(raw, width, height, width*channels, fmt).copy())
             self.cache[key] = pix
@@ -108,7 +110,8 @@ class TiledImage(QGraphicsItem):
         bottom = min((h-1)//TILE, int(rect.bottom()*sy)//TILE)
         painter.save()
         painter.scale(1/sx, 1/sy)
-        painter.setRenderHint(painter.RenderHint.SmoothPixmapTransform, False)
+        painter.setRenderHint(painter.RenderHint.SmoothPixmapTransform,
+                              abs(painter.worldTransform().m11()) < 1)
         for row in range(top, bottom+1):
             for col in range(left, right+1):
                 painter.drawPixmap(col*TILE, row*TILE, self._tile(frame, col, row))

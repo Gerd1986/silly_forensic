@@ -267,3 +267,21 @@ fallback. The final fit marked 21 connections for review, including two
 image-refined connections with larger loop residuals. Nine source-center pixel
 samples matched the written mosaic, and the full-chip overview was inspected.
 These review flags remain material when tracing conductors across tile seams.
+
+## v1.10.1 BigTIFF overview display correction
+
+The virtual TIFF pyramid now samples **both X and Y** by the selected level
+factor. Previously only Y was subsampled while the display buffer advertised
+a reduced X dimension; Qt interpreted these overlong rows with the wrong
+stride, producing horizontal streaks and a distorted overview.
+
+The renderer checks tile shape and byte count before creating a Qt image.
+Fractional minification uses smooth display interpolation; magnified pixel
+views keep nearest-pixel rendering. Regression coverage compares complete
+tiles with direct two-axis source samples at every pyramid level, including
+odd dimensions, edge tiles, RGB/RGBA and 16-bit inputs. The corrected reader
+and actual Qt scene rendering were checked against the complete local M1 TIFF.
+
+This changes display only. Existing source TIFFs, stitched mosaics, project
+coordinates and feature coordinates need no reconstruction or conversion.
+Restart with v1.10.1 and reopen the existing project.

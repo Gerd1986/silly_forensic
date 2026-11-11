@@ -33,7 +33,9 @@ class BigTiffReader:
         width=min(width,w-x)
         height=min(height,h-y)
         tile=np.asarray(self.data[y*factor:(y+height)*factor:factor,
-                                  x*factor:(x+width)*factor])
+                                  x*factor:(x+width)*factor:factor])
+        if tile.shape[:2] != (height,width):
+            raise ValueError("Display tile dimensions do not match the sampled image")
         if tile.dtype==np.uint16:
             tile=(tile>>8).astype(np.uint8)
         elif not tile.flags.c_contiguous:
