@@ -71,10 +71,44 @@ class RegistrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"Inconsistent"):
                 register_grid(paths,(256,256))
 
+    def test_broad_single_peak_is_not_a_second_match(self):
+        from siliconre.grid_registration import _candidate_peaks
+        yy,xx=np.mgrid[:81,:121]
+        scores=.973*np.exp(-((xx-60)**2+(yy-40)**2)/(2*35**2))
+        # The old radius mask finds a runner-up > .96 on the same hill.
+        peaks=_candidate_peaks(scores,3,.72)
+        self.assertEqual([(y,x) for y,x,_ in peaks],[(40,60)])
+
+    def test_smooth_broad_sem_structures(self):
+        from PIL import ImageFilter, ImageOps
+        noise=self.rng.integers(0,255,(280,440),dtype=np.uint8)
+        smooth=np.asarray(ImageOps.autocontrast(
+            Image.fromarray(noise).filter(ImageFilter.GaussianBlur(8))))
+        a=self.save(smooth[:256,:256],"a")
+        b=self.save(smooth[7:263,179:435],"b")
+        match=estimate_translation(a,b,"horizontal")
+        self.assertEqual((match["dx"],match["dy"]),(179,7))
+        self.assertGreater(match["score"],.99)
+
+    def test_full_overlap_resolves_repeating_edge_strip(self):
+        from unittest.mock import patch
+        image=self.rng.integers(0,255,(280,440),dtype=np.uint8)
+        a=self.save(image[:256,:256],"a")
+        b=self.save(image[7:263,179:435],"b")
+        scores=np.full((41,116),-.5)
+        # The edge strip favors a false location. Full-overlap validation
+        # must recover the weaker coarse candidate's correct position.
+        scores[20,20]=.99
+        scores[27,51]=.973
+        with patch("siliconre.grid_registration._valid_ncc",return_value=scores):
+            match=estimate_translation(a,b,"horizontal")
+        self.assertEqual((match["dx"],match["dy"]),(179,7))
+        self.assertEqual(match["candidate_count"],2)
+
     def test_no_overlap_rejected(self):
         a = self.save(self.rng.integers(0,255,(128,128),dtype=np.uint8), "a")
         b = self.save(self.rng.integers(0,255,(128,128),dtype=np.uint8), "b")
-        with self.assertRaisesRegex(ValueError, "Uncertain"):
+        with self.assertRaisesRegex(ValueError, "Weak"):
             estimate_translation(a,b,"horizontal")
 
     def test_flat_rejected(self):
@@ -85,7 +119,7 @@ class RegistrationTests(unittest.TestCase):
     def test_periodic_ambiguity_rejected(self):
         image = np.tile(self.rng.integers(0,255,(128,16),dtype=np.uint8), (1,8))
         path = self.save(image, "periodic")
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
+        with self.assertRaisesRegex(ValueError, "Ambiguous|plausible"):
             estimate_translation(path,path,"horizontal")
 
     def test_disconnected_grid_rejected(self):

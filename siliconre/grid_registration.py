@@ -42,6 +42,26 @@ def _overlap_score(a, b, dx, dy):
     return _ncc(a[y0:y1:step, x0:x1:step],
                 b[y0-dy:y1-dy:step, x0-dx:x1-dx:step])
 
+def _candidate_peaks(scores, radius, min_score):
+    """Find distinct local maxima, not arbitrary pixels on a broad peak."""
+    padded = np.pad(scores, 1, constant_values=-np.inf)
+    maxima = np.ones(scores.shape, dtype=bool)
+    for yy in range(3):
+        for xx in range(3):
+            if (yy, xx) != (1, 1):
+                maxima &= scores >= padded[yy:yy+scores.shape[0], xx:xx+scores.shape[1]]
+    threshold = max(min_score, float(scores.max()) - .08)
+    remaining = np.where(maxima & (scores >= threshold), scores, -np.inf)
+    candidates = []
+    while np.isfinite(remaining).any():
+        iy, ix = np.unravel_index(np.argmax(remaining), remaining.shape)
+        candidates.append((int(iy), int(ix), float(scores[iy, ix])))
+        if len(candidates) > 16:
+            raise ValueError("Too many plausible overlap positions; repeating/weak texture")
+        remaining[max(0, iy-radius):iy+radius+1,
+                  max(0, ix-radius):ix+radius+1] = -np.inf
+    return candidates
+
 def estimate_translation(first, second, axis, min_score=0.72):
     """Return B's integer origin relative to A, or reject uncertain matches.
 
@@ -72,30 +92,42 @@ def estimate_translation(first, second, axis, min_score=0.72):
                         bb[margin:hh-margin, :strip])
     # Restrict the origin to the documented overlap range.
     scores = scores[:, :stop-start+1]
-    iy, ix = np.unravel_index(np.argmax(scores), scores.shape)
-    peak = float(scores[iy, ix])
-    other = scores.copy()
-    radius = max(3, int(ww * .01))
-    other[max(0, iy-radius):iy+radius+1, max(0, ix-radius):ix+radius+1] = -1
-    if peak < min_score or peak - float(other.max()) < .035:
-        raise ValueError(f"Uncertain/ambiguous {axis} overlap: {Path(first).name} -> "
+    peak = float(scores.max())
+    if peak < min_score:
+        raise ValueError(f"Weak {axis} overlap: {Path(first).name} -> "
                          f"{Path(second).name} (NCC {peak:.3f})")
-    dx = int(round((start+ix) * w/ww))
-    dy = int(round((iy-margin) * h/hh))
-    # Refine at original resolution without resampling the source pixels.
-    best = (-2.0, dx, dy)
-    for yy in range(dy-scale-1, dy+scale+2):
-        for xx in range(dx-scale-1, dx+scale+2):
-            score = _overlap_score(a, b, xx, yy)
-            if score > best[0]:
-                best = (score, xx, yy)
-    score, dx, dy = best
+    candidates = _candidate_peaks(scores, max(3, int(ww * .01)), min_score)
+    validated = []
+    for iy, ix, coarse_score in candidates:
+        dx = int(round((start+ix) * w/ww))
+        dy = int(round((iy-margin) * h/hh))
+        # Validate every plausible peak against the entire shared image area.
+        # A narrow edge strip can repeat while the rest of the overlap differs.
+        best = (-2.0, dx, dy, coarse_score)
+        for yy in range(dy-scale-1, dy+scale+2):
+            for xx in range(dx-scale-1, dx+scale+2):
+                score = _overlap_score(a, b, xx, yy)
+                if score > best[0]:
+                    best = (score, xx, yy, coarse_score)
+        validated.append(best)
+    validated.sort(reverse=True)
+    score, dx, dy, peak = validated[0]
     if score < min_score:
         raise ValueError(f"Overlap validation failed (NCC {score:.3f})")
+    # Refinement may bring nearby coarse maxima to the same position.
+    competitors = [item for item in validated[1:]
+                   if max(abs(item[1]-dx), abs(item[2]-dy)) > scale+1]
+    runner_up = competitors[0][0] if competitors else -1.0
+    if runner_up >= min_score and score-runner_up < .035:
+        raise ValueError(f"Ambiguous {axis} overlap: {Path(first).name} -> "
+                         f"{Path(second).name} (best NCC {score:.3f}, "
+                         f"second {runner_up:.3f}; displacement {dx}, {dy})")
     if axis == "vertical":
         dx, dy = dy, dx
     return {"dx": int(dx), "dy": int(dy), "score": round(score, 6),
-            "peak_score": round(peak, 6)}
+            "peak_score": round(peak, 6),
+            "runner_up_score": round(runner_up, 6),
+            "candidate_count": len(candidates)}
 
 def register_grid(mapping, tile_size):
     """Fit a globally consistent translation graph, requiring connectivity."""

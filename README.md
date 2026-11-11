@@ -162,3 +162,13 @@ grid, periodic ambiguity, textureless tiles, disconnected and inconsistent
 graphs, and BigTIFF pixel/source-preservation checks. The two supplied original
 TIFFs could not be downloaded in the implementation environment, so their
 specific overlap has not yet been measured.
+
+## v1.8.1 overlap ambiguity correction
+
+Overlap matching now compares distinct local correlation maxima, rather than
+treating the flank of one broad maximum as a second match. Plausible candidates
+are refined and ranked using the entire shared image area. This also helps when
+a narrow edge strip repeats but the rest of the overlap distinguishes positions.
+Genuinely indistinguishable positions remain rejected. Error messages include
+the best and runner-up full-overlap scores; successful registration records the
+candidate count and runner-up score. The window title now displays 1.8.1.
