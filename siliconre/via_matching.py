@@ -1,6 +1,9 @@
 """Geometry-only cross-layer via pairing suggestions; never auto-connects nets."""
 from math import hypot
-from vias import ensure_via_schema
+try:
+    from .vias import ensure_via_schema
+except ImportError:  # direct-script PyInstaller entrypoint
+    from vias import ensure_via_schema
 
 def suggest_via_pairs(db, base_layer, overlay_layer, tolerance=10.0):
     if base_layer == overlay_layer or tolerance <= 0:
