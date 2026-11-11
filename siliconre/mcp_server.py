@@ -7,6 +7,7 @@ from netgraph import list_links, connected_groups
 from vias import list_vias
 from reconstruction import reconstruct, export_verilog, export_vhdl
 from via_matching import suggest_via_pairs
+from devices import resolve_devices, spice_netlist
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -89,6 +90,18 @@ def suggest_cross_layer_vias(base_layer: str, overlay_layer: str, tolerance_px: 
     """Read-only geometric via pairing suggestions based on saved layer alignment; unverified."""
     with connect() as db:
         return suggest_via_pairs(db,base_layer,overlay_layer,tolerance_px)
+
+@server.tool()
+def list_annotated_transistors() -> list[dict]:
+    """Read user-annotated MOS transistors and their resolved net terminals."""
+    with connect() as db:
+        return resolve_devices(db)
+
+@server.tool()
+def get_spice_netlist() -> str:
+    """Read SPICE netlist of manually annotated MOS devices; models not supplied."""
+    with connect() as db:
+        return spice_netlist(db)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
