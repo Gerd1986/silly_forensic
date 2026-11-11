@@ -41,3 +41,9 @@ Install optional support with `py -m pip install pyvips` and install libvips for
 
 ## Multiresolution viewer (experimental)
 The renderer chooses a TIFF frame based on the current display scale and uses a bounded tile cache. Import a generated pyramidal TIFF as a new layer to try it. Zooming selects among available frame resolutions; original image coordinates remain unchanged. This has not yet been validated against representative SEM TIFFs or tested on Windows.
+
+## Windows executable (CI)
+GitHub Actions workflow `SiliconRE Windows build` compiles the sources and builds a portable PyInstaller onedir ZIP artifact. Run it via **Actions → SiliconRE Windows build → Run workflow** on the feature branch. The workflow does not publish a GitHub Release automatically. The resulting ZIP is a CI artifact, not yet a tested release.
+
+## Optional libvips reader
+TIFFs preferentially use `pyvips` for random-access tile reads when both the Python binding and native libvips are installed; otherwise the Pillow reader is used. Install `pyvips` and a compatible Windows libvips runtime separately. The CI-built EXE currently does **not** bundle the native libvips DLLs, so its TIFF handling falls back to Pillow. Pyramid SubIFD compatibility and 16-bit contrast fidelity need validation with representative SEM images.
