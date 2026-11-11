@@ -85,7 +85,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.8.1 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.9.0 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -192,13 +192,25 @@ class MainWindow(QMainWindow):
             return
         detected=all(parse_tile(path) is not None for path in sources)
         methods=["Tile grid (automatic overlap alignment)",
-                 "Tile grid (edge-to-edge, no overlap)", "Automatic image matching"]
+                 "Tile grid (edge-to-edge, no overlap)", "Automatic image matching",
+                 "Tile grid (known acquisition overlap)"]
         method,ok=QInputDialog.getItem(self,"Stitching mode","Assembly method:",
                                       methods,0 if detected else 2,False)
         if not ok:
             return
-        grid_mode=method in methods[:2]
-        align_grid=method==methods[0]
+        grid_mode=method in (methods[0],methods[1],methods[3])
+        align_grid=method in (methods[0],methods[3])
+        known_overlap=None
+        if method==methods[3]:
+            horizontal,ok=QInputDialog.getDouble(self,"Acquisition overlap",
+                "Known horizontal overlap from scan setup (%):",10.,.1,95.,3)
+            if not ok:
+                return
+            vertical,ok=QInputDialog.getDouble(self,"Acquisition overlap",
+                "Known vertical overlap from scan setup (%):",horizontal,.1,95.,3)
+            if not ok:
+                return
+            known_overlap=(horizontal,vertical)
         if grid_mode:
             try:
                 preview=plan_tile_grid(sources)
@@ -231,7 +243,7 @@ class MainWindow(QMainWindow):
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result=(stitch_tile_grid(sources,output,align=align_grid) if grid_mode
+            result=(stitch_tile_grid(sources,output,align=align_grid,overlap=known_overlap) if grid_mode
                     else stitch_images(sources,output))
             with self.db() as db:
                 db.execute("INSERT INTO layers(name,path) VALUES (?,?)",(name,str(output)))

@@ -172,3 +172,43 @@ a narrow edge strip repeats but the rest of the overlap distinguishes positions.
 Genuinely indistinguishable positions remain rejected. Error messages include
 the best and runner-up full-overlap scores; successful registration records the
 candidate count and runner-up score. The window title now displays 1.8.1.
+
+## v1.9 scan acquisition geometry
+
+Automatic Tile Grid mode now correlates the **complete shared area for every
+coarse candidate translation**, using intensity and local detail to reduce
+the influence of illumination gradients. It no longer rejects an image merely
+because more than 16 correlation maxima were found. Up to 32 leading maxima
+are refined at original pixel coordinates using samples distributed across
+the overlap; the sources are not resampled for output.
+
+Horizontal and vertical neighbor candidates are grouped separately. A unique
+shared scan-step model can resolve individually ambiguous pairs. Multiple
+equally plausible scan-step models still require acquisition information.
+The final position graph must remain connected and consistent.
+
+Standard TIFF **XPosition (286), YPosition (287), XResolution (282),
+YResolution (283), and ResolutionUnit (296)** can constrain the displacement
+when both images use compatible physical units and resolution. Zero/absent
+position deltas are not interpreted as measured overlap. Vendor-specific
+stage metadata is not guessed or automatically converted.
+
+If you know the overlap configured in the SEM scan software, select
+**Tile grid (known acquisition overlap)**. Enter the horizontal and vertical
+percentages from that acquisition. These constrain the expected origins,
+including a near-zero transverse step, and are checked against image contents.
+The dialog defaults are examples, not detected values. Filenames contain row
+and column indices but do not themselves specify pixel pitch or overlap.
+Exact zero-overlap acquisitions should use the existing edge-to-edge mode.
+
+The source sidecar records requested overlap, positional hint source, candidate
+counts, scores, and selection by shared grid step. Purely periodic images with
+no unique features, no usable positions, and no known scan pitch can have
+several mathematically equivalent alignments. The program reports that
+ambiguity instead of inventing a scan step.
+
+Synthetic regressions cover whole-area FFT normalization, known acquisition
+steps and calibrated TIFF positions on periodic textures, shared grid
+disambiguation, genuinely ambiguous shared steps, and more than 16 maxima.
+The supplied original TIFFs could not be downloaded in this environment;
+their actual private metadata and scan pitch remain unverified.

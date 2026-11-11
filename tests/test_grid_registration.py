@@ -67,7 +67,7 @@ class RegistrationTests(unittest.TestCase):
         paths = {(1,1):"a",(1,2):"b",(2,1):"c",(2,2):"d"}
         matches = [{"dx":180,"dy":0}, {"dx":0,"dy":180},
                    {"dx":0,"dy":180}, {"dx":200,"dy":0}]
-        with patch("siliconre.grid_registration.estimate_translation", side_effect=matches):
+        with patch("siliconre.grid_registration.estimate_translation", side_effect=[[dict(item,score=.99)] for item in matches]):
             with self.assertRaisesRegex(ValueError,"Inconsistent"):
                 register_grid(paths,(256,256))
 
@@ -90,20 +90,62 @@ class RegistrationTests(unittest.TestCase):
         self.assertEqual((match["dx"],match["dy"]),(179,7))
         self.assertGreater(match["score"],.99)
 
-    def test_full_overlap_resolves_repeating_edge_strip(self):
-        from unittest.mock import patch
-        image=self.rng.integers(0,255,(280,440),dtype=np.uint8)
-        a=self.save(image[:256,:256],"a")
-        b=self.save(image[7:263,179:435],"b")
-        scores=np.full((41,116),-.5)
-        # The edge strip favors a false location. Full-overlap validation
-        # must recover the weaker coarse candidate's correct position.
-        scores[20,20]=.99
-        scores[27,51]=.973
-        with patch("siliconre.grid_registration._valid_ncc",return_value=scores):
-            match=estimate_translation(a,b,"horizontal")
-        self.assertEqual((match["dx"],match["dy"]),(179,7))
-        self.assertEqual(match["candidate_count"],2)
+    def test_whole_overlap_map_matches_direct_ncc(self):
+        from siliconre.grid_registration import _whole_overlap_scores, _ncc
+        a=self.rng.normal(size=(40,60))
+        b=self.rng.normal(size=(40,60))
+        dxs=np.array([20,30,40])
+        dys=np.array([-3,0,4])
+        scores=_whole_overlap_scores(a,b,dxs,dys)
+        for iy,dy in enumerate(dys):
+            for ix,dx in enumerate(dxs):
+                direct=_ncc(a[max(0,dy):min(40,40+dy),dx:],
+                            b[max(0,-dy):min(40,40-dy),:60-dx])
+                self.assertAlmostEqual(scores[iy,ix],direct,places=6)
+
+    def test_known_acquisition_step_resolves_periodic_image(self):
+        pattern=self.rng.integers(0,255,(128,16),dtype=np.uint8)
+        image=np.tile(pattern,(1,13))
+        a=self.save(image[:,:128],"a")
+        b=self.save(image[:,80:208],"b")
+        match=estimate_translation(a,b,"horizontal",hint=(80,0))
+        self.assertEqual((match["dx"],match["dy"]),(80,0))
+        self.assertEqual(match["position_hint"],"acquisition_overlap")
+
+    def test_standard_tiff_positions_resolve_periodic_image(self):
+        from PIL.TiffImagePlugin import IFDRational
+        pattern=self.rng.integers(0,255,(128,16),dtype=np.uint8)
+        image=np.tile(pattern,(1,13))
+        paths=[]
+        for name,x in (("a",0),("b",80)):
+            path=self.root/(name+".tif")
+            Image.fromarray(image[:,x:x+128]).save(path,tiffinfo={
+                282:IFDRational(100),283:IFDRational(100),296:3,
+                286:IFDRational(x,100),287:IFDRational(0)})
+            paths.append(path)
+        match=estimate_translation(*paths,"horizontal")
+        self.assertEqual((match["dx"],match["dy"]),(80,0))
+        self.assertEqual(match["position_hint"],"standard_tiff_position")
+
+    def test_shared_grid_step_resolves_individually_ambiguous_edges(self):
+        from siliconre.grid_registration import _resolve_axis
+        groups=[[{"dx":179,"dy":0,"score":.98},{"dx":163,"dy":0,"score":.979}],
+                [{"dx":195,"dy":0,"score":.98},{"dx":179,"dy":0,"score":.979}]]
+        matches=_resolve_axis(groups,"horizontal",2)
+        self.assertEqual([m["dx"] for m in matches],[179,179])
+        self.assertTrue(all(m["selection"]=="shared_grid_step" for m in matches))
+
+    def test_equally_plausible_shared_steps_are_not_guessed(self):
+        from siliconre.grid_registration import _resolve_axis
+        options=[{"dx":179,"dy":0,"score":.98},{"dx":163,"dy":0,"score":.979}]
+        with self.assertRaisesRegex(ValueError,"Ambiguous"):
+            _resolve_axis([options,options],"horizontal",2)
+
+    def test_many_maxima_do_not_fail_before_geometry_validation(self):
+        from siliconre.grid_registration import _candidate_peaks
+        scores=np.zeros((30,30))
+        scores[::5,::5]=.97
+        self.assertEqual(len(_candidate_peaks(scores,1,.72)),36)
 
     def test_no_overlap_rejected(self):
         a = self.save(self.rng.integers(0,255,(128,128),dtype=np.uint8), "a")
@@ -113,7 +155,7 @@ class RegistrationTests(unittest.TestCase):
 
     def test_flat_rejected(self):
         path = self.save(np.full((128,128), 100, dtype=np.uint8), "flat")
-        with self.assertRaisesRegex(ValueError, "texture"):
+        with self.assertRaisesRegex(ValueError, "Weak"):
             estimate_translation(path,path,"horizontal")
 
     def test_periodic_ambiguity_rejected(self):

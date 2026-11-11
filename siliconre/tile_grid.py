@@ -54,7 +54,7 @@ def plan_tile_grid(paths,max_pixels=25_000_000_000):
     return {"tiles":mapping,"tile_size":dimensions,"mode":mode,
             "bounds":[r0,r1,c0,c1],"size":[width,height],"missing":missing}
 
-def stitch_tile_grid(paths,output,max_pixels=25_000_000_000,align=True):
+def stitch_tile_grid(paths,output,max_pixels=25_000_000_000,align=True,overlap=None):
     plan=plan_tile_grid(paths,max_pixels)
     r0,r1,c0,c1=plan["bounds"]
     tw,th=plan["tile_size"]
@@ -62,7 +62,7 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000,align=True):
                for row,col in plan["tiles"]}
     edges=[]
     if align:
-        positions,edges=register_grid(plan["tiles"],(tw,th))
+        positions,edges=register_grid(plan["tiles"],(tw,th),overlap=overlap)
         plan["size"]=[max(x+tw for x,y in positions.values()),
                       max(y+th for x,y in positions.values())]
         if plan["size"][0]*plan["size"][1]>max_pixels:
@@ -98,6 +98,7 @@ def stitch_tile_grid(paths,output,max_pixels=25_000_000_000,align=True):
         result={"method":"overlap_tile_grid_bigtiff" if align else "filename_tile_grid_bigtiff",
                 "overlap_policy":"later_row_column_source_wins",
                 "registration_edges":edges,
+                "requested_overlap_percent":list(overlap) if overlap is not None else None,
                 "electrically_verified":False,
                 "row_direction":"increasing_down","column_direction":"increasing_right",
                 "bounds":plan["bounds"],"tile_size":list(plan["tile_size"]),
