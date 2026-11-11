@@ -22,6 +22,7 @@ from netgraph import add_link, list_links, connected_groups, ensure_net_schema
 from vias import detect_via_candidates, ensure_via_schema, list_vias
 from reconstruction import associate_via_trace, connect_vias, reconstruct, export_json, export_verilog, export_vhdl
 from via_matching import suggest_via_pairs
+from devices import add_device, list_devices, resolve_devices, spice_netlist
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -78,7 +79,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 0.5 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.0 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -124,6 +125,8 @@ class MainWindow(QMainWindow):
             ("Connect vias across layers", self.connect_layer_vias),
             ("Suggest aligned via pairs", self.suggest_aligned_vias),
             ("Export reconstructed nets", self.export_reconstruction),
+            ("Add MOS transistor", self.add_mos),
+            ("Export transistor netlist", self.export_transistors),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -602,6 +605,54 @@ class MainWindow(QMainWindow):
         with open(path,"w",encoding="utf-8") as stream:
             stream.write(result)
         self.statusBar().showMessage(f"Exported structural connectivity: {path}")
+
+    def add_mos(self):
+        if not self.current_layer or not self.project:
+            return
+        with self.db() as db:
+            rows=db.execute("SELECT id FROM trace_candidates WHERE status='accepted' ORDER BY id").fetchall()
+        if len(rows)<3:
+            QMessageBox.information(self,"MOS","Accept at least three trace candidates before mapping G/D/S")
+            return
+        name,ok=QInputDialog.getText(self,"MOS annotation","Unique device name (letters, digits, underscore):")
+        if not ok:
+            return
+        kind,ok=QInputDialog.getItem(self,"MOS annotation","Type:",["nmos","pmos"],0,False)
+        if not ok:
+            return
+        choices=[str(row[0]) for row in rows]
+        pins=[]
+        for terminal in ("Gate","Drain","Source"):
+            value,ok=QInputDialog.getItem(self,"MOS terminal",f"{terminal} accepted trace ID:",choices,0,False)
+            if not ok:
+                return
+            pins.append(int(value))
+        bulk_choices=["(unmapped)"]+choices
+        bulk,ok=QInputDialog.getItem(self,"MOS terminal","Bulk accepted trace ID (optional):",bulk_choices,0,False)
+        if not ok:
+            return
+        rect=self.viewer.mapToScene(self.viewer.viewport().rect()).boundingRect()
+        center=rect.center()
+        try:
+            with self.db() as db:
+                add_device(db,name,kind,self.current_layer,center.x(),center.y(),
+                           *pins,None if bulk=="(unmapped)" else int(bulk))
+            self.statusBar().showMessage(f"Annotated {kind} {name} with manually selected terminals")
+        except (ValueError,sqlite3.IntegrityError) as exc:
+            QMessageBox.warning(self,"MOS annotation",str(exc))
+
+    def export_transistors(self):
+        if not self.project:
+            return
+        path,_=QFileDialog.getSaveFileName(self,"Export MOS SPICE netlist",
+                                            str(self.project/"siliconre_mos.cir"),"SPICE (*.cir)")
+        if not path:
+            return
+        with self.db() as db:
+            output=spice_netlist(db)
+        with open(path,"w",encoding="utf-8") as stream:
+            stream.write(output)
+        self.statusBar().showMessage(f"Exported annotated MOS devices: {path}")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
