@@ -1,3 +1,7 @@
+try:
+    from .roi_reader import read_gray_roi
+except ImportError:
+    from roi_reader import read_gray_roi
 """Experimental SEM trace segmentation from a user-defined image region.
 
 Threshold and morphology are deliberately user-tunable. Results are candidate
@@ -12,11 +16,7 @@ def detect_traces(image_path, roi, threshold=0, min_area=30, invert=False):
     x, y, width, height = (int(v) for v in roi)
     if x < 0 or y < 0 or width < 1 or height < 1:
         raise ValueError("Invalid ROI")
-    with Image.open(image_path) as source:
-        if x + width > source.width or y + height > source.height:
-            raise ValueError("ROI exceeds image bounds")
-        region = ImageOps.grayscale(source.crop((x, y, x+width, y+height)))
-        gray = np.asarray(region, dtype=np.uint8)
+    gray=read_gray_roi(image_path,(x,y,width,height))
     mode = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
     if threshold == 0:
         _, mask = cv2.threshold(gray, 0, 255, mode | cv2.THRESH_OTSU)
