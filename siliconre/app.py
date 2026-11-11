@@ -18,6 +18,7 @@ from registration import estimate_translation
 from pyramid import build_pyramid
 from traces import detect_traces
 from candidates import CandidateRect, ensure_schema
+from netgraph import add_link, list_links, connected_groups, ensure_net_schema
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -74,7 +75,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 0.3 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 0.4 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -110,6 +111,9 @@ class MainWindow(QMainWindow):
             ("Delete selected", self.delete_selected),
             ("Resize selected", self.resize_selected),
             ("Export candidates CSV", self.export_candidates),
+            ("Connect selected", self.connect_selected),
+            ("Remove selected links", self.remove_selected_links),
+            ("Export manual nets JSON", self.export_nets),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -303,6 +307,8 @@ class MainWindow(QMainWindow):
         items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
         with self.db() as db:
             for item in items:
+                ensure_net_schema(db)
+                db.execute("DELETE FROM candidate_links WHERE layer=? AND (source_id=? OR target_id=?)", (item.layer, item.row_id, item.row_id))
                 db.execute("DELETE FROM trace_candidates WHERE id=? AND layer=?", (item.row_id, item.layer))
                 self.viewer.scene_.removeItem(item)
 
@@ -338,6 +344,47 @@ class MainWindow(QMainWindow):
             writer.writerow(("id", "layer", "x", "y", "width", "height", "status"))
             writer.writerows(rows)
         self.statusBar().showMessage(f"Exported {len(rows)} candidates to {path}")
+
+    def connect_selected(self):
+        items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
+        if len(items) != 2:
+            QMessageBox.information(self, "Connect", "Select exactly two accepted candidates (Ctrl+click)")
+            return
+        try:
+            with self.db() as db:
+                add_link(db, self.current_layer, items[0].row_id, items[1].row_id)
+            self.statusBar().showMessage("Manual connection saved (not electrically verified)")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Connect", str(exc))
+
+    def remove_selected_links(self):
+        items = [item for item in self.viewer.scene_.selectedItems() if isinstance(item, CandidateRect)]
+        if len(items) != 2:
+            QMessageBox.information(self, "Remove connection", "Select exactly two connected candidates")
+            return
+        a, b = sorted((items[0].row_id, items[1].row_id))
+        with self.db() as db:
+            ensure_net_schema(db)
+            db.execute("DELETE FROM candidate_links WHERE layer=? AND source_id=? AND target_id=?",
+                       (self.current_layer, a, b))
+        self.statusBar().showMessage("Manual connection removed")
+
+    def export_nets(self):
+        if not self.current_layer:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export manual nets",
+                                              str(self.project / (self.current_layer + "_manual_nets.json")),
+                                              "JSON (*.json)")
+        if not path:
+            return
+        with self.db() as db:
+            payload = {"layer": self.current_layer, "verified": False,
+                       "note": "Manual visual links only; electrical continuity unverified",
+                       "links": list_links(db, self.current_layer),
+                       "groups": connected_groups(db, self.current_layer)}
+        with open(path, "w", encoding="utf-8") as out:
+            json.dump(payload, out, indent=2)
+        self.statusBar().showMessage("Manual connectivity exported")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
