@@ -20,6 +20,7 @@ from traces import detect_traces
 from candidates import CandidateRect, ensure_schema
 from netgraph import add_link, list_links, connected_groups, ensure_net_schema
 from vias import detect_via_candidates, ensure_via_schema, list_vias
+from reconstruction import associate_via_trace, connect_vias, reconstruct, export_json, export_verilog, export_vhdl
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -118,6 +119,9 @@ class MainWindow(QMainWindow):
             ("Detect via candidates", self.detect_vias),
             ("Review nearest via", self.review_via),
             ("Export vias JSON", self.export_vias),
+            ("Associate via to trace", self.associate_via),
+            ("Connect vias across layers", self.connect_layer_vias),
+            ("Export reconstructed nets", self.export_reconstruction),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -494,6 +498,72 @@ class MainWindow(QMainWindow):
             json.dump({"layer": self.current_layer, "electrically_verified": False,
                        "via_like_candidates": data}, out, indent=2)
         self.statusBar().showMessage(f"Exported {len(data)} via-like candidates")
+
+    def associate_via(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            vias = [v for v in list_vias(db,self.current_layer,"accepted")]
+            traces = db.execute("SELECT id FROM trace_candidates WHERE layer=? AND status='accepted' ORDER BY id",
+                                (self.current_layer,)).fetchall()
+        if not vias or not traces:
+            QMessageBox.information(self,"Association","Accept a via and a trace in this layer first")
+            return
+        via, ok = QInputDialog.getItem(self,"Associate via","Via ID:",[str(v["id"]) for v in vias],0,False)
+        if not ok:
+            return
+        trace, ok = QInputDialog.getItem(self,"Associate via","Trace ID:",[str(t[0]) for t in traces],0,False)
+        if not ok:
+            return
+        try:
+            with self.db() as db:
+                associate_via_trace(db,int(via),int(trace))
+            self.statusBar().showMessage("Manual via-to-trace association saved")
+        except ValueError as exc:
+            QMessageBox.warning(self,"Association",str(exc))
+
+    def connect_layer_vias(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            ensure_via_schema(db)
+            rows = db.execute("SELECT id,layer FROM via_candidates WHERE status='accepted' ORDER BY layer,id").fetchall()
+        if len(set(layer for _,layer in rows)) < 2:
+            QMessageBox.information(self,"Cross-layer via","Accept vias on at least two different layers")
+            return
+        options = [f"{layer}: #{ident}" for ident,layer in rows]
+        first, ok = QInputDialog.getItem(self,"Cross-layer via","First via:",options,0,False)
+        if not ok:
+            return
+        second, ok = QInputDialog.getItem(self,"Cross-layer via","Second via:",options,0,False)
+        if not ok:
+            return
+        a=rows[options.index(first)][0]
+        b=rows[options.index(second)][0]
+        try:
+            with self.db() as db:
+                connect_vias(db,a,b)
+            self.statusBar().showMessage("Manual cross-layer via link saved; electrical continuity unverified")
+        except ValueError as exc:
+            QMessageBox.warning(self,"Cross-layer via",str(exc))
+
+    def export_reconstruction(self):
+        if not self.project:
+            return
+        path, chosen = QFileDialog.getSaveFileName(
+            self,"Export reconstructed nets",str(self.project / "siliconre_nets.json"),
+            "JSON (*.json);;Verilog (*.v);;VHDL (*.vhd)")
+        if not path:
+            return
+        ext=Path(path).suffix.lower()
+        if ext not in (".json",".v",".vhd",".vhdl"):
+            ext={"JSON (*.json)":".json","Verilog (*.v)":".v","VHDL (*.vhd)":".vhd"}.get(chosen,".json")
+            path += ext
+        with self.db() as db:
+            result = export_verilog(db) if ext==".v" else export_vhdl(db) if ext in (".vhd",".vhdl") else export_json(db)
+        with open(path,"w",encoding="utf-8") as stream:
+            stream.write(result)
+        self.statusBar().showMessage(f"Exported structural connectivity: {path}")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
