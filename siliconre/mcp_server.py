@@ -10,6 +10,7 @@ from via_matching import suggest_via_pairs
 from devices import resolve_devices, spice_netlist
 from mos_detection import list_mos_candidates
 from debug_ports import analyze_debug_interfaces
+from logic_analysis import analyze_sequential
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -116,6 +117,12 @@ def list_debug_port_hypotheses() -> list[dict]:
     """Read evidence-ranked JTAG/SWD/cJTAG/UART/SPI/I2C/SWIM/BDM/Nexus label clues; unverified."""
     with connect() as db:
         return analyze_debug_interfaces(db)
+
+@server.tool()
+def analyze_sequential_logic() -> dict:
+    """Read manually annotated DFF clock groups, shift chains and unverified TAP clues."""
+    with connect() as db:
+        return analyze_sequential(db)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
