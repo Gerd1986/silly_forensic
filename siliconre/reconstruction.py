@@ -4,8 +4,12 @@ Only explicitly accepted links are edges. Spatial proximity is never treated as
 electrical proof. HDL contains disconnected wire/signal declarations, no gates.
 """
 import json
-from netgraph import ensure_net_schema
-from vias import ensure_via_schema
+try:
+    from .netgraph import ensure_net_schema
+    from .vias import ensure_via_schema
+except ImportError:  # direct-script PyInstaller entrypoint
+    from netgraph import ensure_net_schema
+    from vias import ensure_via_schema
 
 def ensure_schema(db):
     ensure_net_schema(db)
