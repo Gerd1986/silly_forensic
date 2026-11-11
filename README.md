@@ -69,3 +69,8 @@ On a successful push build of the feature branch, the workflow attempts to creat
 The Windows CI builds `SiliconRE-MCP-Windows-x64.zip` alongside the GUI ZIP. Unpack the MCP ZIP and configure your MCP client to launch `SiliconRE-MCP.exe` from its unpacked directory with the environment variable `SILICONRE_PROJECT` set to the absolute path of an existing SiliconRE project folder containing `project.sqlite3`. The server uses stdio; it does not expose a network port.
 
 Read-only MCP tools: `list_layers()`, `list_annotations(layer)`, `list_trace_candidates(layer, status="")`. The status filter accepts `candidate`, `accepted`, `rejected`, or an empty string for all. Native Windows packaging must be verified from the GitHub Actions run before use.
+
+## v0.4 manual connectivity graph
+Accept at least two candidates in a layer, Ctrl+click to select both and choose **Connect selected**. A magenta line represents an explicitly asserted visual connection, not verified electrical continuity. **Remove selected links** deletes the selected pair's link. Links are stored in SQLite and restored when switching layers. **Export manual nets JSON** exports links and transitive connected groups of accepted candidate IDs. Deleting a candidate removes its links. This version does not automatically detect vias, join connections across layers, trace actual contours, or infer circuit nets.
+
+MCP adds `list_manual_links(layer)` and `list_manual_net_groups(layer)` as read-only tools. The Windows build runs SQLite graph regression tests before creating the GUI and MCP executables. The feature branch push attempts an automatic `v0.4.0` prerelease, subject to successful CI and GitHub permissions.
