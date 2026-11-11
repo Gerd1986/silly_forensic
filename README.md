@@ -43,13 +43,13 @@ Install optional support with `py -m pip install pyvips` and install libvips for
 The renderer chooses a TIFF frame based on the current display scale and uses a bounded tile cache. Import a generated pyramidal TIFF as a new layer to try it. Zooming selects among available frame resolutions; original image coordinates remain unchanged. This has not yet been validated against representative SEM TIFFs or tested on Windows.
 
 ## Windows executable (CI)
-GitHub Actions workflow `SiliconRE Windows build` compiles the sources and builds a portable PyInstaller onedir ZIP artifact. Run it via **Actions → SiliconRE Windows build → Run workflow** on the feature branch. The workflow does not publish a GitHub Release automatically. The resulting ZIP is a CI artifact, not yet a tested release.
+GitHub Actions workflow `SiliconRE Windows build` compiles the sources and builds a portable PyInstaller onedir ZIP artifact. Run it via **Actions  SiliconRE Windows build  Run workflow** on the feature branch. The workflow does not publish a GitHub Release automatically. The resulting ZIP is a CI artifact, not yet a tested release.
 
 ## Optional libvips reader
 TIFFs preferentially use `pyvips` for random-access tile reads when both the Python binding and native libvips are installed; otherwise the Pillow reader is used. Install `pyvips` and a compatible Windows libvips runtime separately. The CI-built EXE currently does **not** bundle the native libvips DLLs, so its TIFF handling falls back to Pillow. Pyramid SubIFD compatibility and 16-bit contrast fidelity need validation with representative SEM images.
 
 ## Publishing a prerelease
-From **Actions → SiliconRE Windows build and release → Run workflow**, choose `feature/siliconre-v0.1`, check `publish_release`, and enter `v0.2.0`. After a successful build, GitHub CLI creates a prerelease tagged at that exact commit and uploads `SiliconRE-Windows-x64.zip`. Ordinary pushes only build and upload an Actions artifact; they do not publish releases. To publish another version, choose a new unused tag.
+From **Actions  SiliconRE Windows build and release  Run workflow**, choose `feature/siliconre-v0.1`, check `publish_release`, and enter `v0.2.0`. After a successful build, GitHub CLI creates a prerelease tagged at that exact commit and uploads `SiliconRE-Windows-x64.zip`. Ordinary pushes only build and upload an Actions artifact; they do not publish releases. To publish another version, choose a new unused tag.
 
 ## v0.2 experimental trace candidates
 The **Detect trace candidates** toolbar action segments the currently visible region using Otsu or a manually selected grayscale threshold, a small morphological opening, and connected-component analysis. Results can be exported to JSON with bounding boxes and centroids. Limitations: foreground polarity is currently bright-on-dark, results are unverified visual candidates (not nets), and the processing path uses Pillow and may decode large TIFFs. Zoom into a region under 12 MP before running. No automatic electrical net tracing or transistor recognition is claimed.
@@ -131,7 +131,7 @@ physical layer, then give the assembled layer a name.
 The filename provides topology, not the final pixel distance. Normalized
 cross-correlation finds each horizontal and vertical neighbor's displacement,
 refines it at original resolution, and fits a consistent global position graph.
-The supported search range is **5–50% overlap**, with transverse drift up to
+The supported search range is **5-50% overlap**, with transverse drift up to
 approximately **8%**. Images must have equal dimensions and at least 32 pixels
 per side. Acquisition orientation is increasing rows downward and columns rightward.
 Rotation, scale differences, reversed scan directions, and different delayering
@@ -157,11 +157,9 @@ Large output limits and disk-space checks from v1.6 still apply. Import remains
 synchronous and may temporarily block the GUI.
 
 Validation includes synthetic horizontal/vertical overlaps, transverse drift,
-brightness offsets, coarse-to-full-resolution refinement, a consistent 2×2
+brightness offsets, coarse-to-full-resolution refinement, a consistent 2�2
 grid, periodic ambiguity, textureless tiles, disconnected and inconsistent
-graphs, and BigTIFF pixel/source-preservation checks. The two supplied original
-TIFFs could not be downloaded in the implementation environment, so their
-specific overlap has not yet been measured.
+graphs, and BigTIFF pixel/source-preservation checks. Original-acquisition validation is described in the v1.10 section below.
 
 ## v1.8.1 overlap ambiguity correction
 
@@ -210,8 +208,7 @@ ambiguity instead of inventing a scan step.
 Synthetic regressions cover whole-area FFT normalization, known acquisition
 steps and calibrated TIFF positions on periodic textures, shared grid
 disambiguation, genuinely ambiguous shared steps, and more than 16 maxima.
-The supplied original TIFFs could not be downloaded in this environment;
-their actual private metadata and scan pitch remain unverified.
+Original-acquisition validation and FEI metadata support are described below.
 
 ### v1.9.1 large-tile coarse-search correction
 
@@ -220,3 +217,53 @@ when large tiles are reduced for FFT matching. Every accepted displacement must
 still pass the original-resolution feature-correlation threshold. A regression
 uses 4096-pixel-wide sources shifted by 3001 pixels horizontally and 3 pixels
 vertically, recovering the exact original-resolution displacement.
+
+## v1.10 FEI/Apreo acquisition support and SEM noise handling
+
+For unrotated FEI/Thermo Fisher SEM TIFFs with calibrated acquisition XML in
+tag **34683**, automatic Tile Grid mode now reads stage X/Y, pixel size in
+metres, scan rotation and beam shift. Image Y runs opposite to stage Y for this
+supported acquisition orientation. The parser validates common pixel scale,
+stage rotation, constant beam shift and plausible neighbor spacing. Unsupported
+metadata does not silently receive a guessed calibration.
+
+This provides the measured mosaic geometry before image matching. Gaussian
+noise suppression followed by a wider bandpass prevents high-frequency SEM
+shot noise from dominating the detail correlation. Image alignment searches
+within a bounded neighborhood of the measured stage displacement. Reliable
+image matches refine the tile origins using a robust global fit with soft
+stage-position priors. Stage positioning can differ from actual image alignment
+by several dozen pixels, so metadata does not impose an exact two-pixel search.
+
+Textureless or genuinely ambiguous image neighbors keep their measured FEI
+layout and are explicitly marked **metadata_only** for review. Inconsistent
+image constraints are downweighted; fitted seam residuals over eight pixels
+are marked for review. A maximum field-relative drift limit prevents runaway
+image fits. The sources sidecar records expected stage displacement, measured
+image alternatives, selection method, fitted displacement, residual and review
+state. This is image assembly; it does not establish electrical continuity.
+
+Use **Tile grid (automatic overlap alignment)** with images from one physical
+layer. No overlap percentage or manual cropping is required for a supported
+FEI acquisition. The import shows alignment and writing progress and can be
+cancelled; partial TIFF output is removed before a layer is added. The completion
+status reports the number of neighbor connections marked for review.
+
+Validation on the supplied local acquisition identifies an approximately
+**10% nominal overlap** (3686.4-pixel median step for 4096-pixel tiles), with
+slightly different boundary steps. The original v1.9.1 rejection was reproduced
+on the first M1 pair. Real 2�2 samples from M1, M2, M3 and Poly assemble using
+the corrected metadata and image matching. Synthetic regressions cover
+independent SEM-like noise, stage-position error, unit/rotation validation,
+metadata-only layout, bounded drift, BigTIFF provenance and cancellation cleanup.
+
+The Windows workflow now builds pushes to main and the development branch.
+Automatic release publication runs from main; development pushes build artifacts
+without publishing a release.
+Full local M1 validation assembled all **247 source tiles** and **462 neighbor
+connections** into a **69,982 × 47,912** BigTIFF (3,353,043,120 bytes).
+443 neighbor connections were image-refined; 19 required measured-geometry
+fallback. The final fit marked 21 connections for review, including two
+image-refined connections with larger loop residuals. Nine source-center pixel
+samples matched the written mosaic, and the full-chip overview was inspected.
+These review flags remain material when tracing conductors across tile seams.

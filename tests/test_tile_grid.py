@@ -64,6 +64,27 @@ class TileGridTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertFalse(output.with_suffix(".sources.json").exists())
 
+    def test_cancel_during_writing_removes_partial_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            a=root/"Tile_001-001.tif"
+            b=root/"Tile_001-002.tif"
+            Image.new("L",(64,64),25).save(a)
+            Image.new("L",(64,64),50).save(b)
+            target=root/"cancelled.tif"
+            events=[]
+            def cancel(done,total,message):
+                events.append((done,total,message))
+                if message.startswith("Writing tile"):
+                    raise InterruptedError("cancel")
+            with self.assertRaises(InterruptedError):
+                stitch_tile_grid([a,b],target,align=False,progress=cancel)
+            self.assertTrue(events)
+            self.assertFalse(target.exists())
+            self.assertFalse(root.joinpath("cancelled.partial.tif").exists())
+            self.assertFalse(target.with_suffix(".sources.json").exists())
+            self.assertTrue(a.exists() and b.exists())
+
     def test_duplicate_coordinate(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

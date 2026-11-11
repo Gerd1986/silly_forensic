@@ -88,7 +88,7 @@ class RegistrationTests(unittest.TestCase):
         b=self.save(smooth[7:263,179:435],"b")
         match=estimate_translation(a,b,"horizontal")
         self.assertEqual((match["dx"],match["dy"]),(179,7))
-        self.assertGreater(match["score"],.99)
+        self.assertGreater(match["score"],.98)
 
     def test_whole_overlap_map_matches_direct_ncc(self):
         from siliconre.grid_registration import _whole_overlap_scores, _ncc

@@ -10,7 +10,7 @@ from PySide6.QtGui import QAction, QPixmap, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsScene,
     QGraphicsView, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
-    QDockWidget, QListWidget, QToolBar, QSlider, QLabel
+    QDockWidget, QListWidget, QToolBar, QSlider, QLabel, QProgressDialog
 )
 
 from tiles import TiledImage
@@ -85,7 +85,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.9.1 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.10.0 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -241,23 +241,40 @@ class MainWindow(QMainWindow):
             f"Automatically align and stitch {len(sources)} overlapping images into one layer '{name}'?\n"
             "This may take time. If alignment fails, no layer will be created.")!=QMessageBox.StandardButton.Yes:
             return
+        dialog=QProgressDialog("Preparing SEM tiles...","Cancel",0,1000,self)
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.show()
+        def report(done,total,message):
+            dialog.setLabelText(message)
+            dialog.setValue(int(1000*done/max(total,1)))
+            QApplication.processEvents()
+            if dialog.wasCanceled():
+                raise InterruptedError("Stitching cancelled")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result=(stitch_tile_grid(sources,output,align=align_grid,overlap=known_overlap) if grid_mode
+            result=(stitch_tile_grid(sources,output,align=align_grid,overlap=known_overlap,progress=report) if grid_mode
                     else stitch_images(sources,output))
             with self.db() as db:
                 db.execute("INSERT INTO layers(name,path) VALUES (?,?)",(name,str(output)))
+        except InterruptedError:
+            self.statusBar().showMessage("Stitching cancelled")
+            return
         except Exception as exc:
             QMessageBox.warning(self,"Stitch images",str(exc))
             return
         finally:
+            dialog.close()
             QApplication.restoreOverrideCursor()
         self.refresh_layers()
         matches=self.layers.findItems(name,Qt.MatchFlag.MatchExactly)
         if matches:
             self.layers.setCurrentItem(matches[0])
         self.statusBar().showMessage(
-            f"Stitched {len(sources)} images into {name}: {result['size'][0]} x {result['size'][1]}")
+            f"Stitched {len(sources)} images into {name}: {result['size'][0]} x {result['size'][1]}"
+            f"; {result.get('review_required_edges',0)} neighbor connections marked for review")
 
     def import_images(self):
         if not self.project:
@@ -305,7 +322,7 @@ class MainWindow(QMainWindow):
             self.refresh_link_lines()
             self.show_vias()
             self.show_mos_candidates()
-            self.statusBar().showMessage(name + " — " + row[0])
+            self.statusBar().showMessage(name + " - " + row[0])
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
 
@@ -674,7 +691,7 @@ class MainWindow(QMainWindow):
             if not proposals:
                 QMessageBox.information(self,"Via pairing","No matching accepted via candidates")
                 return
-            choices=[f"Via #{p['via_a']} ↔ #{p['via_b']} ({p['distance_px']:.2f} px)" for p in proposals]
+            choices=[f"Via #{p['via_a']}  #{p['via_b']} ({p['distance_px']:.2f} px)" for p in proposals]
             choice,ok=QInputDialog.getItem(self,"Review suggested pair",
                                             "Select one proposed pair to connect:",choices,0,False)
             if not ok:

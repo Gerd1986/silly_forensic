@@ -7,11 +7,11 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v1.9.1)'
+        description: 'Release tag (e.g. v1.10.0)'
         type: string
-        default: 'v1.9.1'
+        default: 'v1.10.0'
   push:
-    branches: [feature/siliconre-v0.1]
+    branches: [main, feature/siliconre-v0.1]
     paths:
       - 'siliconre/**'
       - 'tests/**'
@@ -55,21 +55,21 @@ jobs:
             SiliconRE-Windows-x64.zip
             SiliconRE-MCP-Windows-x64.zip
       - name: Validate release tag
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v1.9.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.10.0' || inputs.version }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.9.1' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.10.0' }
       - name: Publish GitHub release
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v1.9.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.10.0' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v1.9.1 preview.
+          SiliconRE v1.10.0 preview.
           - SEM viewer, annotations and project database
           - Editable trace candidates, review status, resizing and CSV export
           - Manual visual links between accepted candidates and JSON net-group export
@@ -82,6 +82,9 @@ jobs:
           - Multi-protocol debug-port evidence analyzer (JTAG, SWD, cJTAG, UART, SPI, I2C, SWIM, BDM, Nexus)
           - Manually annotated logic cells and DFF clock/shift-chain structural hypotheses
           - Automatic overlapping SEM image stitching into one TIFF mosaic per layer
+          - FEI/Apreo TIFF stage-coordinate and pixel-size calibration (XML tag 34683)
+          - SEM noise suppression and bounded image refinement with robust stage priors
+          - Progress and cancellation for large tile-grid imports
           - Whole-area intensity/detail correlation instead of narrow edge-strip matching
           - Shared acquisition grid steps, calibrated standard TIFF positions, known overlap input
           - Overlap-aware Tile_ROW-COL stitching with original-resolution refinement and quality checks

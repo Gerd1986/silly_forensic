@@ -91,8 +91,9 @@ def _whole_overlap_scores(a, b, dxs, dys):
 def _detail(image):
     # Remove broad illumination gradients while retaining silicon features.
     from PIL import ImageFilter
-    return image.astype(np.float32)-np.asarray(
-        Image.fromarray(image).filter(ImageFilter.BoxBlur(3)),dtype=np.float32)
+    smooth=Image.fromarray(image).filter(ImageFilter.GaussianBlur(2))
+    return np.asarray(smooth,dtype=np.float32)-np.asarray(
+        smooth.filter(ImageFilter.BoxBlur(12)),dtype=np.float32)
 
 def _position_hint(first,second,axis):
     """Use only calibrated standard TIFF positions, never guessed vendor units."""
@@ -112,7 +113,8 @@ def _position_hint(first,second,axis):
         return None
     return (dx,dy)
 
-def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candidates=False):
+def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candidates=False,
+                         hint_tolerance=None):
     """Whole-overlap translation search with optional calibrated origin hint."""
     if axis not in ("horizontal","vertical"):
         raise ValueError("Unknown neighbor axis")
@@ -143,7 +145,7 @@ def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candid
         hx,hy=hint
         if not (0<hx<w and abs(hy)<h):
             raise ValueError("Acquisition position does not imply a valid neighbor overlap")
-        tolerance=max(2,scale)
+        tolerance=max(2,scale) if hint_tolerance is None else float(hint_tolerance)
         dxs=np.arange(max(1,int(np.floor((hx-tolerance)*ww/w))),
                       min(ww,int(np.ceil((hx+tolerance)*ww/w))+1))
         dys=np.arange(max(1-hh,int(np.floor((hy-tolerance)*hh/h))),
@@ -166,7 +168,7 @@ def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candid
         best=(-2.,dx,dy)
         for yy in range(dy-scale-1,dy+scale+2):
             for xx in range(dx-scale-1,dx+scale+2):
-                if hint is not None and max(abs(xx-hint[0]),abs(yy-hint[1]))>max(2,scale):
+                if hint is not None and max(abs(xx-hint[0]),abs(yy-hint[1]))>tolerance:
                     continue
                 score=.35*_overlap_score(a,b,xx,yy,max_side=96)+.65*_overlap_score(detail_a,detail_b,xx,yy,max_side=96)
                 if score>best[0]:
@@ -175,7 +177,7 @@ def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candid
         best=(-2.,bx,by)
         for yy in range(by-1,by+2):
             for xx in range(bx-1,bx+2):
-                if hint is not None and max(abs(xx-hint[0]),abs(yy-hint[1]))>max(2,scale):
+                if hint is not None and max(abs(xx-hint[0]),abs(yy-hint[1]))>tolerance:
                     continue
                 score=.35*_overlap_score(a,b,xx,yy)+.65*_overlap_score(detail_a,detail_b,xx,yy)
                 if score>best[0]:
@@ -193,7 +195,9 @@ def estimate_translation(first,second,axis,min_score=.72,hint=None,return_candid
                           "position_hint":hint_source})
     validated.sort(key=lambda item:item["score"],reverse=True)
     if not validated:
-        raise ValueError("Whole-overlap validation failed; acquisition coordinates may be incorrect")
+        raise ValueError(f"No reliable {axis} image match after original-resolution validation: "
+                         f"{Path(first).name} -> {Path(second).name}. "
+                         f"Position hint: {hint_source or 'none'}.")
     if return_candidates:
         return validated
     return _choose_pair(validated,axis)
@@ -232,15 +236,61 @@ def _resolve_axis(edge_options,axis,tolerance):
     # Preserve individually unique matches even when the scan step varies.
     return [_choose_pair(options,axis) for options in edge_options]
 
-def register_grid(mapping,tile_size,overlap=None):
+def _register_fei_grid(mapping,tile_size,plan,progress=None):
+    try:
+        from .sem_metadata import fit_fei_positions
+    except ImportError:
+        from sem_metadata import fit_fei_positions
+    initial,neighbors=plan
+    observations=[]
+    tolerance=max(8,min(tile_size)*.04)
+    for number,(first,second,axis,expected) in enumerate(neighbors,1):
+        record={"first":list(first),"second":list(second),
+                "dx":expected[0],"dy":expected[1],
+                "expected_displacement":list(expected),
+                "position_hint":"fei_xml_34683",
+                "selection":"metadata_only_ambiguous",
+                "review_required":True}
+        try:
+            options=estimate_translation(mapping[first],mapping[second],axis,
+                        hint=expected,hint_tolerance=tolerance,return_candidates=True)
+            best=options[0]
+            runner=options[1]["score"] if len(options)>1 else -1
+            record.update(score=best["score"],runner_up_score=runner,
+                          alternatives=[{"dx":o["dx"],"dy":o["dy"],"score":o["score"]}
+                                        for o in options[:4]])
+            if best["score"]-runner>=.015:
+                record.update(dx=best["dx"],dy=best["dy"],
+                              selection="image_refined",review_required=False)
+            record["candidate_count"]=best["candidate_count"]
+        except ValueError as exc:
+            record["selection"]="metadata_only_weak_image"
+            record["image_diagnostic"]=str(exc)
+        observations.append(record)
+        if progress:
+            progress(number,len(neighbors),f"Aligning SEM neighbors {number}/{len(neighbors)}")
+    return fit_fei_positions(initial,observations,tile_size)
+
+def register_grid(mapping,tile_size,overlap=None,progress=None):
     """Find shared acquisition steps, then fit consistent global positions."""
     keys=sorted(mapping)
     if len(keys)<2:
         raise ValueError("Select at least two neighboring tiles")
+    if overlap is None:
+        try:
+            from .sem_metadata import fei_grid_positions
+        except ImportError:
+            from sem_metadata import fei_grid_positions
+        fei=fei_grid_positions(mapping,tile_size)
+        if fei is not None:
+            return _register_fei_grid(mapping,tile_size,fei,progress=progress)
     grouped={"horizontal":[],"vertical":[]}
     adjacency={key:set() for key in keys}
     if overlap is not None and (len(overlap)!=2 or any(not 0<v<100 for v in overlap)):
         raise ValueError("Known horizontal/vertical overlap must be between 0 and 100 percent")
+    completed=0
+    neighbor_count=sum((key[0]+d[0],key[1]+d[1]) in mapping
+                       for key in keys for d in ((0,1),(1,0)))
     for key in keys:
         for delta,axis in (((0,1),"horizontal"),((1,0),"vertical")):
             neighbor=(key[0]+delta[0],key[1]+delta[1])
@@ -255,6 +305,9 @@ def register_grid(mapping,tile_size,overlap=None):
             grouped[axis].append((key,neighbor,options))
             adjacency[key].add(neighbor)
             adjacency[neighbor].add(key)
+            completed+=1
+            if progress:
+                progress(completed,neighbor_count,f"Aligning neighbors {completed}/{neighbor_count}")
     edges=[]
     for axis,records in grouped.items():
         if not records:
