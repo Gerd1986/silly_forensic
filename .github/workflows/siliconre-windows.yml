@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v0.5.1)'
+        description: 'Release tag (e.g. v0.5.2)'
         type: string
-        default: 'v0.5.1'
+        default: 'v0.5.2'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
@@ -58,23 +58,24 @@ jobs:
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v0.5.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.5.2' || inputs.version }}
         run: |
           if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v0.3.0' }
       - name: Publish GitHub release
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v0.5.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v0.5.2' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v0.5.1 preview.
+          SiliconRE v0.5.2 preview.
           - SEM viewer, annotations and project database
           - Editable trace candidates, review status, resizing and CSV export
           - Manual visual links between accepted candidates and JSON net-group export
           - Experimental via-like circular feature detection, review, JSON export and MCP access
           - Manual cross-layer via-to-trace connectivity and reconstructed net groups
+          - Registration-aware via pairing proposals requiring human confirmation
           - Structural Verilog and VHDL wire/signal exports (no inferred logic)
           - MCP tools for manual links and connected groups
           - Layer overlay and manual/automatic translation registration
