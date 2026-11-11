@@ -74,7 +74,8 @@ def reconstruct(db):
 def export_json(db):
     return json.dumps({"electrically_verified":False,
                        "source":"manually accepted visual links only",
-                       "nets":reconstruct(db)},indent=2)
+                       "nets":reconstruct(db),
+                       "devices":_resolved_devices(db)},indent=2)
 
 def export_verilog(db):
     nets=reconstruct(db)
@@ -82,6 +83,13 @@ def export_verilog(db):
            "// Nets are based on manually accepted links; electrical continuity unverified.",
            "module siliconre_reconstruction ();"]
     lines.extend(f"  (* keep = \"true\" *) wire {n['name']};" for n in nets)
+    for device in _resolved_devices(db):
+        p=device["pins"]
+        if device["complete"]:
+            lines.append(f"  // Manual MOS device {device['name']}; bulk omitted by Verilog primitive")
+            lines.append(f"  {device['kind']} {device['name']} ({p['d']}, {p['s']}, {p['g']});")
+        else:
+            lines.append(f"  // SKIPPED {device['name']}: incomplete terminal mapping")
     lines.append("endmodule")
     return "\n".join(lines)+"\n"
 
@@ -93,5 +101,27 @@ def export_vhdl(db):
            "entity siliconre_reconstruction is","end entity;",
            "architecture structural of siliconre_reconstruction is"]
     lines.extend(f"  signal {n['name']} : std_logic;" for n in nets)
-    lines.extend(["begin","end architecture;"])
+    devices=_resolved_devices(db)
+    if devices:
+        lines.extend(["  component nmos_device is",
+                      "    port (d : inout std_logic; g : in std_logic; s : inout std_logic);",
+                      "  end component;",
+                      "  component pmos_device is",
+                      "    port (d : inout std_logic; g : in std_logic; s : inout std_logic);",
+                      "  end component;"])
+    lines.append("begin")
+    for device in devices:
+        p=device["pins"]
+        if device["complete"]:
+            lines.append(f"  {device['name']}: {device['kind']}_device port map (d => {p['d']}, g => {p['g']}, s => {p['s']});")
+        else:
+            lines.append(f"  -- SKIPPED {device['name']}: incomplete terminal mapping")
+    lines.append("end architecture;")
     return "\n".join(lines)+"\n"
+
+def _resolved_devices(db):
+    try:
+        from .devices import resolve_devices
+    except ImportError:
+        from devices import resolve_devices
+    return resolve_devices(db)
