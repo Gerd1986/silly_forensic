@@ -1,3 +1,7 @@
+try:
+    from .roi_reader import read_gray_roi
+except ImportError:
+    from roi_reader import read_gray_roi
 """Conservative experimental MOS candidates from aligned binary POLY and ACTIVE masks.
 
 Images must already be aligned and represent the same pixel coordinate system.
@@ -9,10 +13,7 @@ from PIL import Image, ImageOps
 
 def _binary(path, roi, polarity, threshold):
     x,y,w,h=roi
-    with Image.open(path) as img:
-        if x<0 or y<0 or x+w>img.width or y+h>img.height:
-            raise ValueError("ROI outside mask image")
-        gray=np.asarray(ImageOps.grayscale(img.crop((x,y,x+w,y+h))),dtype=np.uint8)
+    gray=read_gray_roi(path,(x,y,w,h))
     if threshold==0:
         _,mask=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
     else:
