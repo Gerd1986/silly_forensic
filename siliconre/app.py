@@ -19,6 +19,7 @@ from pyramid import build_pyramid
 from traces import detect_traces
 from candidates import CandidateRect, ensure_schema
 from netgraph import add_link, list_links, connected_groups, ensure_net_schema
+from vias import detect_via_candidates, ensure_via_schema, list_vias
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -75,7 +76,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 0.4 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 0.5 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -114,6 +115,9 @@ class MainWindow(QMainWindow):
             ("Connect selected", self.connect_selected),
             ("Remove selected links", self.remove_selected_links),
             ("Export manual nets JSON", self.export_nets),
+            ("Detect via candidates", self.detect_vias),
+            ("Review nearest via", self.review_via),
+            ("Export vias JSON", self.export_vias),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -189,6 +193,7 @@ class MainWindow(QMainWindow):
             for candidate in candidates:
                 self.show_candidate(candidate)
             self.refresh_link_lines()
+            self.show_vias()
             self.statusBar().showMessage(name + " — " + row[0])
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
@@ -413,6 +418,82 @@ class MainWindow(QMainWindow):
         with open(path, "w", encoding="utf-8") as out:
             json.dump(payload, out, indent=2)
         self.statusBar().showMessage("Manual connectivity exported")
+
+    def show_vias(self):
+        if not self.current_layer:
+            return
+        for item in list(self.viewer.scene_.items()):
+            if item.data(0) == "via_candidate":
+                self.viewer.scene_.removeItem(item)
+        with self.db() as db:
+            vias = list_vias(db, self.current_layer)
+        for via in vias:
+            x, y, r = via["x"], via["y"], via["radius"]
+            color = {"candidate":"#ffff00","accepted":"#00ff66","rejected":"#ff5555"}[via["status"]]
+            circle = self.viewer.scene_.addEllipse(x-r,y-r,2*r,2*r,QPen(QColor(color),2))
+            circle.setZValue(7)
+            circle.setData(0, "via_candidate")
+            circle.setToolTip(f"Via-like candidate #{via['id']} ({via['status']}); unverified")
+
+    def detect_vias(self):
+        if not self.current_layer or not self.viewer.pix:
+            return
+        with self.db() as db:
+            image_path = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
+        roi = self.viewer.mapToScene(self.viewer.viewport().rect()).boundingRect().intersected(
+            self.viewer.pix.sceneBoundingRect())
+        x, y = max(0, int(roi.left())), max(0, int(roi.top()))
+        w, h = int(roi.right())-x, int(roi.bottom())-y
+        if w < 1 or h < 1 or w*h > 12_000_000:
+            QMessageBox.warning(self, "Via detection", "Zoom into an image region smaller than 12 MP")
+            return
+        radius, ok = QInputDialog.getInt(self, "Via-like features", "Maximum radius (pixels):", 30, 3, 500)
+        if not ok:
+            return
+        try:
+            proposals = detect_via_candidates(image_path, (x,y,w,h), max_radius=radius)
+            with self.db() as db:
+                ensure_via_schema(db)
+                db.executemany("INSERT INTO via_candidates(layer,x,y,radius) VALUES (?,?,?,?)",
+                               [(self.current_layer, v["x"], v["y"], v["radius"]) for v in proposals])
+            self.show_vias()
+            self.statusBar().showMessage(f"{len(proposals)} unverified via-like circular features")
+        except Exception as exc:
+            QMessageBox.warning(self, "Via detection", str(exc))
+
+    def review_via(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            vias = list_vias(db, self.current_layer)
+        if not vias:
+            return
+        labels = [f"#{v['id']} ({v['x']:.0f},{v['y']:.0f}) {v['status']}" for v in vias]
+        choice, ok = QInputDialog.getItem(self, "Review via", "Candidate:", labels, 0, False)
+        if not ok:
+            return
+        status, ok = QInputDialog.getItem(self, "Review via", "Status:", ["candidate","accepted","rejected"], 0, False)
+        if not ok:
+            return
+        selected = vias[labels.index(choice)]
+        with self.db() as db:
+            db.execute("UPDATE via_candidates SET status=? WHERE id=? AND layer=?",
+                       (status, selected["id"], self.current_layer))
+        self.show_vias()
+
+    def export_vias(self):
+        if not self.current_layer:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export via candidates",
+                                              str(self.project / (self.current_layer + "_vias.json")), "JSON (*.json)")
+        if not path:
+            return
+        with self.db() as db:
+            data = list_vias(db, self.current_layer)
+        with open(path, "w", encoding="utf-8") as out:
+            json.dump({"layer": self.current_layer, "electrically_verified": False,
+                       "via_like_candidates": data}, out, indent=2)
+        self.statusBar().showMessage(f"Exported {len(data)} via-like candidates")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
