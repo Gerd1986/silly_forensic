@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v1.2.0)'
+        description: 'Release tag (e.g. v1.3.0)'
         type: string
-        default: 'v1.2.0'
+        default: 'v1.3.0'
   push:
     branches: [feature/siliconre-v0.1]
     paths:
@@ -58,18 +58,18 @@ jobs:
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v1.2.0' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.3.0' || inputs.version }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.2.0' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.3.0' }
       - name: Publish GitHub release
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v1.2.0' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.3.0' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v1.2.0 preview.
+          SiliconRE v1.3.0 preview.
           - SEM viewer, annotations and project database
           - Editable trace candidates, review status, resizing and CSV export
           - Manual visual links between accepted candidates and JSON net-group export
@@ -80,6 +80,7 @@ jobs:
           - User-annotated NMOS/PMOS G/D/S/B terminal mapping and SPICE export
           - Experimental POLY/ACTIVE crossing detector with human review and MCP access
           - Multi-protocol debug-port evidence analyzer (JTAG, SWD, cJTAG, UART, SPI, I2C, SWIM, BDM, Nexus)
+          - Manually annotated logic cells and DFF clock/shift-chain structural hypotheses
           - MCP access to annotated transistor netlists
           - MCP tools for manual links and connected groups
           - Layer overlay and manual/automatic translation registration
