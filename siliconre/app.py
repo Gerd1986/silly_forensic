@@ -28,6 +28,7 @@ from debug_ports import analyze_debug_interfaces
 from logic_analysis import KINDS, PINS, add_logic_cell, resolved_cells, analyze_sequential
 from batch_import import images_in_folder
 from stitching import stitch_images
+from tile_grid import stitch_tile_grid, plan_tile_grid, parse_tile
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -84,7 +85,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.4 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.5 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -189,6 +190,23 @@ class MainWindow(QMainWindow):
         if len(sources)<2:
             QMessageBox.warning(self,"Stitch images","Select at least two overlapping images")
             return
+        detected=all(parse_tile(path) is not None for path in sources)
+        methods=["Tile grid (filename row-column)","Automatic image matching"]
+        method,ok=QInputDialog.getItem(self,"Stitching mode","Assembly method:",
+                                      methods,0 if detected else 1,False)
+        if not ok:
+            return
+        grid_mode=method==methods[0]
+        if grid_mode:
+            try:
+                preview=plan_tile_grid(sources)
+            except (ValueError,OSError) as exc:
+                QMessageBox.warning(self,"Tile grid",str(exc))
+                return
+            gaps=len(preview["missing"])
+            if gaps and QMessageBox.question(self,"Missing tiles",
+                    f"Grid has {gaps} missing positions. Fill them with gray placeholders?")!=QMessageBox.StandardButton.Yes:
+                return
         name,ok=QInputDialog.getText(self,"Stitch images","New layer name (e.g. M1):")
         if not ok or not name.strip():
             return
@@ -211,7 +229,8 @@ class MainWindow(QMainWindow):
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            result=stitch_images(sources,output)
+            result=(stitch_tile_grid(sources,output) if grid_mode
+                    else stitch_images(sources,output))
             with self.db() as db:
                 db.execute("INSERT INTO layers(name,path) VALUES (?,?)",(name,str(output)))
         except Exception as exc:
