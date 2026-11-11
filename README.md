@@ -64,3 +64,8 @@ In GitHub Actions run **SiliconRE Windows build and release** on `feature/silico
 Select one rectangle and choose **Resize selected** to enter width and height. **Export candidates CSV** writes all candidate boxes and review statuses for the current layer with UTF-8 BOM for Excel compatibility.
 
 On a successful push build of the feature branch, the workflow attempts to create prerelease `v0.3.0` with the Windows ZIP. If the tag/release already exists, the workflow skips publishing rather than overwriting it. Future versions should update the release tag in the workflow or use the manual dispatch input. GitHub Actions results and the resulting release must still be verified.
+
+## Standalone Windows MCP server (v0.3.1)
+The Windows CI builds `SiliconRE-MCP-Windows-x64.zip` alongside the GUI ZIP. Unpack the MCP ZIP and configure your MCP client to launch `SiliconRE-MCP.exe` from its unpacked directory with the environment variable `SILICONRE_PROJECT` set to the absolute path of an existing SiliconRE project folder containing `project.sqlite3`. The server uses stdio; it does not expose a network port.
+
+Read-only MCP tools: `list_layers()`, `list_annotations(layer)`, `list_trace_candidates(layer, status="")`. The status filter accepts `candidate`, `accepted`, `rejected`, or an empty string for all. Native Windows packaging must be verified from the GitHub Actions run before use.
