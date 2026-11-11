@@ -9,6 +9,7 @@ from reconstruction import reconstruct, export_verilog, export_vhdl
 from via_matching import suggest_via_pairs
 from devices import resolve_devices, spice_netlist
 from mos_detection import list_mos_candidates
+from debug_ports import analyze_debug_interfaces
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -109,6 +110,12 @@ def list_mos_crossing_candidates(poly_layer: str = "", status: str = "") -> list
     """Read POLY/ACTIVE overlap proposals; they are not confirmed transistors."""
     with connect() as db:
         return list_mos_candidates(db,poly_layer,status)
+
+@server.tool()
+def list_debug_port_hypotheses() -> list[dict]:
+    """Read evidence-ranked JTAG/SWD/cJTAG/UART/SPI/I2C/SWIM/BDM/Nexus label clues; unverified."""
+    with connect() as db:
+        return analyze_debug_interfaces(db)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
