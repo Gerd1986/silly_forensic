@@ -23,6 +23,7 @@ from vias import detect_via_candidates, ensure_via_schema, list_vias
 from reconstruction import associate_via_trace, connect_vias, reconstruct, export_json, export_verilog, export_vhdl
 from via_matching import suggest_via_pairs
 from devices import add_device, list_devices, resolve_devices, spice_netlist
+from mos_detection import detect_mos_candidates, ensure_mos_candidate_schema, list_mos_candidates
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -79,7 +80,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.0 — SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.1 — SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -128,6 +129,9 @@ class MainWindow(QMainWindow):
             ("Add MOS transistor", self.add_mos),
             ("Delete MOS transistor", self.delete_mos),
             ("Export transistor netlist", self.export_transistors),
+            ("Detect MOS candidates", self.detect_mos),
+            ("Review MOS candidate", self.review_mos),
+            ("Export MOS candidates JSON", self.export_mos_candidates),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -204,6 +208,7 @@ class MainWindow(QMainWindow):
                 self.show_candidate(candidate)
             self.refresh_link_lines()
             self.show_vias()
+            self.show_mos_candidates()
             self.statusBar().showMessage(name + " — " + row[0])
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
@@ -671,6 +676,93 @@ class MainWindow(QMainWindow):
         with open(path,"w",encoding="utf-8") as stream:
             stream.write(output)
         self.statusBar().showMessage(f"Exported annotated MOS devices: {path}")
+
+    def show_mos_candidates(self):
+        if not self.current_layer:
+            return
+        for item in list(self.viewer.scene_.items()):
+            if item.data(0)=="mos_candidate":
+                self.viewer.scene_.removeItem(item)
+        with self.db() as db:
+            rows=list_mos_candidates(db,self.current_layer)
+        for c in rows:
+            color={"candidate":"#ffa500","accepted":"#00ff66","rejected":"#ff5555"}[c["status"]]
+            rect=self.viewer.scene_.addRect(c["x"],c["y"],c["width"],c["height"],QPen(QColor(color),2))
+            rect.setZValue(8)
+            rect.setData(0,"mos_candidate")
+            rect.setToolTip(f"MOS crossing candidate #{c['id']} ({c['status']}); not a verified transistor")
+
+    def detect_mos(self):
+        if not self.current_layer or not self.viewer.pix:
+            return
+        with self.db() as db:
+            layers=dict(db.execute("SELECT name,path FROM layers"))
+        options=[name for name in layers if name!=self.current_layer]
+        if not options:
+            QMessageBox.information(self,"MOS detection","Import an aligned ACTIVE mask layer first")
+            return
+        active,ok=QInputDialog.getItem(self,"MOS crossing detector","ACTIVE mask layer:",options,0,False)
+        if not ok:
+            return
+        polarity,ok=QInputDialog.getItem(self,"POLY mask","POLY foreground:",["bright","dark"],0,False)
+        if not ok:
+            return
+        active_polarity,ok=QInputDialog.getItem(self,"ACTIVE mask","ACTIVE foreground:",["bright","dark"],0,False)
+        if not ok:
+            return
+        roi=self.viewer.mapToScene(self.viewer.viewport().rect()).boundingRect().intersected(
+            self.viewer.pix.sceneBoundingRect())
+        x,y=max(0,int(roi.left())),max(0,int(roi.top()))
+        w,h=int(roi.right())-x,int(roi.bottom())-y
+        if w<1 or h<1 or w*h>12_000_000:
+            QMessageBox.warning(self,"MOS detection","Zoom into a region smaller than 12 MP")
+            return
+        try:
+            proposals=detect_mos_candidates(layers[self.current_layer],layers[active],
+                                            (x,y,w,h),polarity,active_polarity)
+            with self.db() as db:
+                ensure_mos_candidate_schema(db)
+                db.executemany("""INSERT INTO mos_candidates
+                  (poly_layer,active_layer,x,y,width,height,area)
+                  VALUES (?,?,?,?,?,?,?)""",
+                  [(self.current_layer,active,p["x"],p["y"],p["width"],p["height"],p["area"])
+                   for p in proposals])
+            self.show_mos_candidates()
+            self.statusBar().showMessage(f"{len(proposals)} unverified POLY/ACTIVE crossing candidates")
+        except Exception as exc:
+            QMessageBox.warning(self,"MOS detection",str(exc))
+
+    def review_mos(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            rows=list_mos_candidates(db,self.current_layer)
+        if not rows:
+            return
+        options=[f"#{c['id']} ({c['x']:.0f},{c['y']:.0f}) {c['status']}" for c in rows]
+        selected,ok=QInputDialog.getItem(self,"MOS review","Candidate:",options,0,False)
+        if not ok:
+            return
+        status,ok=QInputDialog.getItem(self,"MOS review","Status:",["candidate","accepted","rejected"],0,False)
+        if not ok:
+            return
+        with self.db() as db:
+            db.execute("UPDATE mos_candidates SET status=? WHERE id=?",
+                       (status,rows[options.index(selected)]["id"]))
+        self.show_mos_candidates()
+
+    def export_mos_candidates(self):
+        if not self.current_layer:
+            return
+        path,_=QFileDialog.getSaveFileName(self,"Export MOS candidates",
+                  str(self.project/(self.current_layer+"_mos_candidates.json")),"JSON (*.json)")
+        if not path:
+            return
+        with self.db() as db:
+            rows=list_mos_candidates(db,self.current_layer)
+        with open(path,"w",encoding="utf-8") as stream:
+            json.dump({"verified_transistors":False,"candidates":rows},stream,indent=2)
+        self.statusBar().showMessage(f"Exported {len(rows)} MOS candidates")
 
     def update_opacity(self, value):
         if self.viewer.overlay:
