@@ -59,3 +59,8 @@ After **Detect trace candidates**, bounding boxes appear directly over the SEM l
 
 ## v0.2 release
 In GitHub Actions run **SiliconRE Windows build and release** on `feature/siliconre-v0.1` with `publish_release=true` and `version=v0.2.0`. The workflow publishes a prerelease only if the Windows build succeeds. Confirm the build result and ZIP before relying on the release.
+
+## v0.3 candidate editing and automatic release
+Select one rectangle and choose **Resize selected** to enter width and height. **Export candidates CSV** writes all candidate boxes and review statuses for the current layer with UTF-8 BOM for Excel compatibility.
+
+On a successful push build of the feature branch, the workflow attempts to create prerelease `v0.3.0` with the Windows ZIP. If the tag/release already exists, the workflow skips publishing rather than overwriting it. Future versions should update the release tag in the workflow or use the manual dispatch input. GitHub Actions results and the resulting release must still be verified.
