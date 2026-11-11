@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from netgraph import list_links, connected_groups
+from vias import list_vias
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -58,6 +59,12 @@ def list_manual_net_groups(layer: str) -> list[list[int]]:
     """List connected groups of accepted candidates from manual visual links."""
     with connect() as db:
         return connected_groups(db, layer)
+
+@server.tool()
+def list_via_candidates(layer: str, status: str = "") -> list[dict]:
+    """List unverified via-like circular feature candidates and human review status."""
+    with connect() as db:
+        return list_vias(db, layer, status)
 
 if __name__ == "__main__":
     server.run(transport="stdio")
