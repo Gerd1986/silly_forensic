@@ -1,0 +1,32 @@
+name: SiliconRE Windows build
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/siliconre-v0.1]
+    paths:
+      - 'siliconre/**'
+      - 'requirements.txt'
+      - '.github/workflows/siliconre-windows.yml'
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Compile Python files
+        run: python -m compileall -q siliconre
+      - name: Build portable application
+        run: pyinstaller --noconfirm --clean --onedir --windowed --name SiliconRE --paths siliconre siliconre/app.py
+      - name: Archive application
+        shell: pwsh
+        run: Compress-Archive -Path dist/SiliconRE -DestinationPath SiliconRE-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SiliconRE-Windows-x64
+          path: SiliconRE-Windows-x64.zip
