@@ -34,6 +34,10 @@ Select a base layer, click **Overlay layer**, and choose another layer. Adjust t
 Choose a base layer and an overlay, then click **Auto-align overlay**. OpenCV phase correlation estimates a translation only, using previews. The images must have identical dimensions, orientation, and scale. Inspect results manually; repeating chip patterns can yield incorrect offsets. A weak response is rejected.
 
 ## TIFF pyramids
-**Build TIFF pyramid** writes a tiled, multiresolution TIFF using optional `pyvips` and a separately installed Windows libvips runtime. The source is not overwritten. Pyramid generation currently runs synchronously and may freeze the UI for large files. The current viewer does **not yet select the best pyramid level**; it still uses Pillow tile crops. True level-aware viewing is a separate next milestone.
+**Build TIFF pyramid** writes a tiled, multiresolution TIFF using optional `pyvips` and a separately installed Windows libvips runtime. The source is not overwritten. Pyramid generation currently runs synchronously and may freeze the UI for large files. The viewer now selects a reduced-resolution TIFF frame when Pillow exposes pyramid levels as frames. Some TIFF pyramids store reduced levels in SubIFDs that Pillow does not expose as frames; these still fall back to full-resolution tile crops. For reliable large-file random access, a libvips-backed reader is planned.
 
 Install optional support with `py -m pip install pyvips` and install libvips for Windows.
+
+
+## Multiresolution viewer (experimental)
+The renderer chooses a TIFF frame based on the current display scale and uses a bounded tile cache. Import a generated pyramidal TIFF as a new layer to try it. Zooming selects among available frame resolutions; original image coordinates remain unchanged. This has not yet been validated against representative SEM TIFFs or tested on Windows.
