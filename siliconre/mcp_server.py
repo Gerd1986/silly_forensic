@@ -5,6 +5,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from netgraph import list_links, connected_groups
 from vias import list_vias
+from reconstruction import reconstruct, export_verilog, export_vhdl
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -65,6 +66,22 @@ def list_via_candidates(layer: str, status: str = "") -> list[dict]:
     """List unverified via-like circular feature candidates and human review status."""
     with connect() as db:
         return list_vias(db, layer, status)
+
+@server.tool()
+def list_reconstructed_nets() -> list[dict]:
+    """Read cross-layer graph nets derived only from manually accepted connections."""
+    with connect() as db:
+        return reconstruct(db)
+
+@server.tool()
+def get_structural_hdl(language: str = "verilog") -> str:
+    """Return structural wire declarations only; no inferred gates or functional logic."""
+    with connect() as db:
+        if language == "verilog":
+            return export_verilog(db)
+        if language == "vhdl":
+            return export_vhdl(db)
+        raise ValueError("Language must be verilog or vhdl")
 
 if __name__ == "__main__":
     server.run(transport="stdio")
