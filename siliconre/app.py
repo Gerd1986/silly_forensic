@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
             ("Suggest aligned via pairs", self.suggest_aligned_vias),
             ("Export reconstructed nets", self.export_reconstruction),
             ("Add MOS transistor", self.add_mos),
+            ("Delete MOS transistor", self.delete_mos),
             ("Export transistor netlist", self.export_transistors),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
@@ -640,6 +641,23 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Annotated {kind} {name} with manually selected terminals")
         except (ValueError,sqlite3.IntegrityError) as exc:
             QMessageBox.warning(self,"MOS annotation",str(exc))
+
+    def delete_mos(self):
+        if not self.project:
+            return
+        with self.db() as db:
+            devices=list_devices(db)
+        if not devices:
+            return
+        names=[d["name"] for d in devices]
+        choice,ok=QInputDialog.getItem(self,"Delete MOS transistor","Device:",names,0,False)
+        if not ok:
+            return
+        if QMessageBox.question(self,"Confirm deletion",f"Delete annotated device {choice}?") != QMessageBox.StandardButton.Yes:
+            return
+        with self.db() as db:
+            db.execute("DELETE FROM mos_devices WHERE name=?",(choice,))
+        self.statusBar().showMessage(f"Deleted annotated MOS device {choice}")
 
     def export_transistors(self):
         if not self.project:
