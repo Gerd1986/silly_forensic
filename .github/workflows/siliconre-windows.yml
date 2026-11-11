@@ -35,7 +35,11 @@ jobs:
       - name: Build portable application
         run: pyinstaller --noconfirm --clean --onedir --windowed --name SiliconRE --paths siliconre siliconre/app.py
       - name: Build standalone MCP server
-        run: pyinstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --collect-all mcp --collect-all pydantic --collect-all pydantic_core siliconre/mcp_server.py
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --collect-submodules mcp --collect-data mcp --collect-submodules pydantic --collect-submodules pydantic_core siliconre/mcp_server.py
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller MCP build failed" }
+          if (-not (Test-Path 'dist/SiliconRE-MCP/SiliconRE-MCP.exe')) { throw "MCP executable missing" }
       - name: Archive application
         shell: pwsh
         run: |
