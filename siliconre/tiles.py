@@ -15,19 +15,28 @@ class TiledImage(QGraphicsItem):
         super().__init__()
         self.filename = str(filename)
         self.vips = None
+        self.bigreader = None
+        # tifffile memory mapping is the primary path for our uncompressed
+        # multi-gigapixel BigTIFF output. Avoid Pillow's pixel safety guard.
         if self.filename.lower().endswith((".tif", ".tiff")):
+            try:
+                from bigtiff_reader import BigTiffReader
+                self.bigreader = BigTiffReader(self.filename)
+            except (ValueError, OSError, ImportError):
+                pass
+        if self.bigreader is None and self.filename.lower().endswith((".tif", ".tiff")):
             try:
                 from vips_reader import VipsReader
                 self.vips = VipsReader(self.filename)
             except (ImportError, OSError):
                 pass
-        self.source = None if self.vips else Image.open(self.filename)
+        self.source = None if (self.vips or self.bigreader) else Image.open(self.filename)
         self.levels = []
         # Pillow exposes pyramidal TIFF IFDs as frames for common TIFF layouts.
         # Only strictly smaller frames are treated as reduced-resolution levels.
-        base = (self.vips.width, self.vips.height) if self.vips else self.source.size
+        base = (self.bigreader.width, self.bigreader.height) if self.bigreader else ((self.vips.width, self.vips.height) if self.vips else self.source.size)
         self.width, self.height = base
-        for index in range(0 if self.vips else getattr(self.source, "n_frames", 1)):
+        for index in range(0 if (self.vips or self.bigreader) else getattr(self.source, "n_frames", 1)):
             self.source.seek(index)
             w, h = self.source.size
             if w <= base[0] and h <= base[1] and (w, h) not in [size for _, size in self.levels]:
@@ -39,6 +48,8 @@ class TiledImage(QGraphicsItem):
             self.source.seek(0)
         if self.vips:
             self.levels = [(index, (w, h)) for index, (_, w, h) in enumerate(self.vips.levels)]
+        if self.bigreader:
+            self.levels = [(index, (w, h)) for index, (_, w, h) in enumerate(self.bigreader.levels)]
         self.cache = OrderedDict()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption, True)
 
@@ -60,8 +71,9 @@ class TiledImage(QGraphicsItem):
             self.cache.move_to_end(key)
             return self.cache[key]
         x, y = col*TILE, row*TILE
-        if self.vips:
-            raw, width, height, channels = self.vips.crop(frame, x, y, TILE, TILE)
+        if self.vips or self.bigreader:
+            raw, width, height, channels = (self.bigreader.crop(frame,x,y,TILE,TILE)
+                                           if self.bigreader else self.vips.crop(frame,x,y,TILE,TILE))
             fmt = QImage.Format.Format_RGBA8888 if channels == 4 else QImage.Format.Format_RGB888
             pix = QPixmap.fromImage(QImage(raw, width, height, width*channels, fmt).copy())
             self.cache[key] = pix
@@ -107,4 +119,6 @@ class TiledImage(QGraphicsItem):
             self.source.close()
         if self.vips:
             self.vips.close()
+        if self.bigreader:
+            self.bigreader.close()
         self.cache.clear()
