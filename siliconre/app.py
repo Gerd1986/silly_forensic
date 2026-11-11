@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from tiles import TiledImage
 from registration import estimate_translation
 from pyramid import build_pyramid
+from traces import detect_traces
 
 class Viewer(QGraphicsView):
     def __init__(self, window):
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
             ("Align overlay (dx,dy)", self.align_overlay),
             ("Auto-align overlay", self.auto_align_overlay),
             ("Build TIFF pyramid", self.create_pyramid),
+            ("Detect trace candidates", self.detect_candidates),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]:
             act = QAction(title, self)
@@ -237,6 +239,34 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Pyramid saved: " + destination)
         except Exception as exc:
             QMessageBox.warning(self, "Pyramid failed", str(exc))
+
+    def detect_candidates(self):
+        if not self.current_layer:
+            return
+        with self.db() as db:
+            image_path = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
+        view_rect = self.viewer.mapToScene(self.viewer.viewport().rect()).boundingRect()
+        image_rect = self.viewer.pix.boundingRect()
+        roi = view_rect.intersected(image_rect)
+        x, y = max(0, int(roi.left())), max(0, int(roi.top()))
+        width, height = int(roi.width()), int(roi.height())
+        if width < 1 or height < 1:
+            return
+        if width * height > 12000000:
+            QMessageBox.warning(self, "ROI too large", "Zoom in to a region smaller than 12 megapixels")
+            return
+        threshold, ok = QInputDialog.getInt(self, "Trace candidates", "Threshold (0 = Otsu):", 0, 0, 255)
+        if not ok:
+            return
+        try:
+            regions = detect_traces(image_path, (x, y, width, height), threshold)
+            export, _ = QFileDialog.getSaveFileName(self, "Export trace candidates", str(self.project / (self.current_layer + "_candidates.json")), "JSON (*.json)")
+            if export:
+                with open(export, "w", encoding="utf-8") as out:
+                    json.dump({"layer": self.current_layer, "roi": [x,y,width,height], "candidates": regions}, out, indent=2)
+            self.statusBar().showMessage(f"{len(regions)} unverified trace candidates in visible region")
+        except Exception as exc:
+            QMessageBox.warning(self, "Trace detection failed", str(exc))
 
     def update_opacity(self, value):
         if self.viewer.overlay:
