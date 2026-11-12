@@ -1,8 +1,17 @@
-"""Read-only local MCP interface to SiliconRE project metadata."""
+"""Local stdio MCP interface to saved project evidence and bounded image views."""
+import base64
+import json
+import math
+from contextlib import closing, contextmanager
 import os
 import sqlite3
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+from mcp.types import TextContent, ImageContent
+from image_regions import render_region, png_bytes, layer_path, region_geometry
+from image_preview import image_size
+from layer_alignment import load_alignment, alignment_parameters
+import numpy as np
 from netgraph import list_links, connected_groups
 from vias import list_vias
 from reconstruction import reconstruct, export_verilog, export_vhdl
@@ -15,11 +24,14 @@ from logic_analysis import analyze_sequential
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
 
+@contextmanager
 def connect():
     db = PROJECT / "project.sqlite3"
     if not db.is_file():
         raise FileNotFoundError("Set SILICONRE_PROJECT to an existing SiliconRE project")
-    return sqlite3.connect(str(db))
+    with closing(sqlite3.connect(str(db))) as connection:
+        with connection:
+            yield connection
 
 @server.tool()
 def list_layers() -> list[dict]:
@@ -123,6 +135,145 @@ def analyze_sequential_logic() -> dict:
     """Read manually annotated DFF clock groups, shift chains and unverified TAP clues."""
     with connect() as db:
         return analyze_sequential(db)
+
+
+@contextmanager
+def visual_connect():
+    """Image tools never create or migrate project metadata."""
+    path = PROJECT / "project.sqlite3"
+    if not path.is_file():
+        raise FileNotFoundError("Set SILICONRE_PROJECT to an existing SiliconRE project")
+    with closing(sqlite3.connect(path.as_uri()+"?mode=ro", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        yield db
+
+
+def _image_result(metadata, frames):
+    content = [TextContent(type="text", text=json.dumps(metadata, allow_nan=False))]
+    for label, gray, mask in frames:
+        content.append(TextContent(type="text", text=label))
+        content.append(ImageContent(type="image", mimeType="image/png",
+                       data=base64.b64encode(png_bytes(gray, mask)).decode("ascii")))
+    return content
+
+
+@server.tool()
+def get_layer_info(layer: str) -> dict:
+    """Get original layer dimensions, pixel coordinate convention and saved alignment availability."""
+    with visual_connect() as db:
+        path = layer_path(db, PROJECT, layer)
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        pairs = ([{"base": a, "overlay": b} for a,b in db.execute(
+            "SELECT base,overlay FROM alignments WHERE base=? OR overlay=?", (layer,layer))]
+            if "alignments" in tables else [])
+    width, height = image_size(path)
+    return {"layer": layer, "width": width, "height": height,
+            "coordinate_units": "original image pixels; origin at top-left; X right, Y down",
+            "alignment_pairs": pairs, "max_image_output_side": 1536}
+
+
+@server.tool()
+def get_layer_alignment(base_layer: str, overlay_layer: str) -> dict:
+    """Read saved overlay -> base translation, clockwise rotation and scale; handles reverse pairs.
+    Manual registration is provisional, not proof of feature correspondence.
+    """
+    with visual_connect() as db:
+        layer_path(db, PROJECT, base_layer)
+        layer_path(db, PROJECT, overlay_layer)
+        matrix = load_alignment(db, base_layer, overlay_layer)
+    dx, dy, angle, scale = alignment_parameters(matrix)
+    return {"base_layer": base_layer, "overlay_layer": overlay_layer,
+            "dx": dx, "dy": dy, "rotation_deg_clockwise": angle, "scale": scale,
+            "source_to_base": matrix.tolist(), "pivot": [0,0], "verified": False}
+
+
+@server.tool()
+def get_layer_overview(layer: str, max_side: int = 1024):
+    """View a box-averaged grayscale overview, at most 1536 pixels/side, with original coordinates.
+    Use get_layer_region for detail. This does not extract or accept circuit features.
+    """
+    region_geometry(0, 0, 1, 1, max_side)
+    with visual_connect() as db:
+        path = layer_path(db, PROJECT, layer)
+    width, height = image_size(path)
+    gray, mask, meta = render_region(path, (0,0,width,height), max_side)
+    meta.update({"layer": layer, "coordinate_frame": layer, "view": "overview"})
+    return _image_result(meta, [(layer+" overview", gray, mask)])
+
+
+@server.tool()
+def get_layer_region(layer: str, x: float, y: float, width: float, height: float,
+                     max_side: int = 1024):
+    """View a bounded source-coordinate crop (top-left x,y and width,height in original pixels).
+    Output is downsampled as needed. Transparent areas indicate missing image coverage.
+    """
+    region_geometry(x,y,width,height,max_side)
+    with visual_connect() as db:
+        path = layer_path(db, PROJECT, layer)
+    gray, mask, meta = render_region(path, (x,y,width,height), max_side)
+    meta.update({"layer": layer, "coordinate_frame": layer, "view": "region"})
+    return _image_result(meta, [(layer+" source region", gray, mask)])
+
+
+@server.tool()
+def compare_layer_region(base_layer: str, overlay_layer: str,
+                         x: float, y: float, width: float, height: float,
+                         max_side: int = 1024, opacity: float = .5):
+    """Return base, aligned overlay and blended PNGs on ONE base-coordinate grid.
+    Applies the saved dx/dy, clockwise rotation and uniform scale, including reverse pairs.
+    Requires saved alignment; never guesses identity for unaligned layers.
+    Transparency marks absent coverage. Rough registration is insufficient to prove connectivity.
+    """
+    region_geometry(x,y,width,height,max_side)
+    if not math.isfinite(opacity) or not 0 <= opacity <= 1:
+        raise ValueError("opacity must be between 0 and 1")
+    with visual_connect() as db:
+        base_path = layer_path(db, PROJECT, base_layer)
+        overlay_path = layer_path(db, PROJECT, overlay_layer)
+        matrix = load_alignment(db, base_layer, overlay_layer)
+    rectangle = (x,y,width,height)
+    base, bm, base_meta = render_region(base_path, rectangle, max_side)
+    overlay, om, overlay_meta = render_region(overlay_path, rectangle, max_side, matrix)
+    blend = base.copy()
+    both = bm & om
+    blend[both] = np.rint(base[both]*(1-opacity)+overlay[both]*opacity).astype(np.uint8)
+    blend[om & ~bm] = overlay[om & ~bm]
+    meta = {"coordinate_frame": base_layer, "base_layer": base_layer,
+            "overlay_layer": overlay_layer, "base": base_meta, "overlay": overlay_meta,
+            "opacity": opacity, "common_covered_fraction": float(both.mean()),
+            "verified": False, "note": "Visual comparison using saved registration; no electrical inference"}
+    return _image_result(meta, [(base_layer+" in base coordinates", base, bm),
+                               (overlay_layer+" aligned into base coordinates", overlay, om),
+                               ("Blended comparison", blend, bm | om)])
+
+
+@server.tool()
+def plan_layer_scan(layer: str, tile_width: int = 4096, tile_height: int = 4096,
+                    overlap_px: int = 256, start_index: int = 0, limit: int = 25) -> dict:
+    """Page through an overlapping row-major screening grid in source pixels.
+    Use each returned rectangle with get_layer_region or compare_layer_region (layer as base).
+    This plans views only; it does not claim that any region has been inspected.
+    """
+    if not 1 <= tile_width <= 16384 or not 1 <= tile_height <= 16384:
+        raise ValueError("Tile dimensions must be between 1 and 16384")
+    if not 0 <= overlap_px < min(tile_width,tile_height) or start_index < 0 or not 1 <= limit <= 100:
+        raise ValueError("Invalid overlap, start index or page limit")
+    with visual_connect() as db:
+        path = layer_path(db, PROJECT, layer)
+    width, height = image_size(path)
+    dx, dy = tile_width-overlap_px, tile_height-overlap_px
+    columns = max(1, math.ceil(max(0,width-tile_width)/dx)+1)
+    rows = max(1, math.ceil(max(0,height-tile_height)/dy)+1)
+    total = columns*rows
+    tiles = []
+    for index in range(start_index,min(start_index+limit,total)):
+        x, y = (index%columns)*dx, (index//columns)*dy
+        tiles.append({"index": index, "x": x, "y": y,
+                      "width": min(tile_width,width-x), "height": min(tile_height,height-y)})
+    next_index = start_index+len(tiles)
+    return {"coordinate_frame": layer, "source_size": [width,height], "total_tiles": total,
+            "tiles": tiles, "next_index": next_index if next_index < total else None}
+
 
 if __name__ == "__main__":
     server.run(transport="stdio")

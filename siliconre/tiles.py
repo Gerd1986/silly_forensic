@@ -57,7 +57,7 @@ class TiledImage(QGraphicsItem):
         return QRectF(0, 0, self.width, self.height)
 
     def _level(self, painter):
-        scale = painter.worldTransform().m11()
+        scale = math.hypot(painter.worldTransform().m11(), painter.worldTransform().m12())
         if scale <= 0:
             return self.levels[0]
         # Select closest level not coarser than one source pixel per screen pixel.
@@ -111,7 +111,7 @@ class TiledImage(QGraphicsItem):
         painter.save()
         painter.scale(1/sx, 1/sy)
         painter.setRenderHint(painter.RenderHint.SmoothPixmapTransform,
-                              abs(painter.worldTransform().m11()) < 1)
+                              math.hypot(painter.worldTransform().m11(), painter.worldTransform().m12()) < 1)
         for row in range(top, bottom+1):
             for col in range(left, right+1):
                 painter.drawPixmap(col*TILE, row*TILE, self._tile(frame, col, row))

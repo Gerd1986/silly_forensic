@@ -331,3 +331,69 @@ Before deletion a complete SQLite backup is saved in the project's
 `annotation_backups` folder. If backup or deletion fails, annotations are retained.
 To restore, close SiliconRE, keep a copy of the current database, and replace
 `project.sqlite3` with the chosen backup database. Existing exported files are untouched.
+
+
+## Manual layer correction and MCP image screening (v1.11.0)
+
+Choose a base layer, then **Layers → Overlay layer**, then
+**Layers → Manual overlay correction...**. The dialog previews X/Y offset,
+clockwise rotation and uniform scale live. Use the spin-box arrows for small
+steps (0.01 degree / 0.01 percent), or type a larger value. Save stores the pair;
+Cancel restores the previous view. Reset sets (dx,dy,rotation,scale) to (0,0,0,1)
+in the preview and still requires Save to persist.
+
+Coordinates use the original image pixels: X right, Y down, origin at the
+top-left. Rotation and scaling are around the overlay's (0,0), followed by
+translation in base pixels. Adjust angle/scale first and then offsets.
+This is a rough registration aid, not a validated automatic registration.
+Original image files, annotations and their source-layer coordinates are retained.
+Legacy translation-only alignments automatically gain zero rotation and scale 1
+when saved/opened by the GUI. Reverse layer pairs use the inverse transform.
+Saving one direction removes a stale saved reverse entry.
+
+Translation-only autoalignment will not overwrite an active manual rotation or
+scale. Via pairing uses the full saved transform; the POLY/ACTIVE mask detector
+requires pixel-aligned masks and does not silently ignore overlay transforms.
+
+The standalone MCP executable still uses local **stdio**, without a network port.
+Set **SILICONRE_PROJECT** to the folder containing **project.sqlite3** and launch
+the executable from a compatible local MCP client. Replace the complete extracted
+MCP distribution when updating; the new server includes image dependencies.
+
+New MCP tools:
+
+| Tool | Purpose |
+| --- | --- |
+| get_layer_info | Original width/height, coordinate convention and available alignment pairs |
+| get_layer_alignment | Saved overlay-to-base matrix, angle, scale and translation |
+| get_layer_overview | Anti-aliased grayscale overview with original-coordinate metadata |
+| get_layer_region | Detailed region using original source-layer pixel coordinates |
+| compare_layer_region | Base, transformed overlay and blend on exactly the same base-coordinate grid |
+| plan_layer_scan | Paginated overlapping screening rectangles; no automatic inspection claim |
+
+For example, request an M1 overview, then compare M1 with poly at
+x=10000, y=12000, width=4096, height=4096. The comparison requires a saved alignment
+and reads your GUI correction. Each request returns PNG image content and JSON
+metadata, including source dimensions, requested rectangle, output scale,
+transform and coverage. Transparent regions have no image data. Comparisons
+do not automatically mark, accept or connect features.
+
+Use plan_layer_scan with layer=M1, tile_width=4096, tile_height=4096,
+overlap_px=256, limit=25, then request the returned rectangles and continue from
+next_index. This provides reproducible coordinates for a systematic review.
+
+Outputs default to at most 1024 pixels/side (hard maximum 1536). At native detail,
+one output pixel represents one original pixel; larger regions are reduced.
+For fine contacts, request smaller regions rather than trusting an overview.
+Large uncompressed TIFFs are memory-mapped and box-averaged in row bands; they
+are not fully decoded into RAM. Other formats retain the 24-million-pixel decode
+guard. These are grayscale inspection views, not scientific intensity exports.
+
+The six image/geometry tools open the database read-only, do not migrate its
+schema, and do not modify original images or annotations. The existing metadata
+tools keep their existing schema behavior. Returned crops are sent to the MCP
+client for review; a local connection does not imply local-only AI processing.
+No raw SEM sample images are included in this repository.
+
+Installing/connecting the MCP client remains a separate step: adding these tools
+does not automatically install a ChatGPT desktop plugin.

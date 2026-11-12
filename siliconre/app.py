@@ -11,10 +11,12 @@ from PySide6.QtGui import QAction, QPixmap, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsScene,
     QGraphicsView, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
-    QDockWidget, QListWidget, QToolBar, QSlider, QLabel, QProgressDialog
+    QDockWidget, QListWidget, QToolBar, QSlider, QLabel, QProgressDialog,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QPushButton
 )
 
 from annotations import clear_annotations, backup_annotations
+from layer_alignment import ensure_alignment_schema, load_alignment, save_alignment, alignment_parameters
 from tiles import TiledImage
 from registration import estimate_translation
 from pyramid import build_pyramid
@@ -56,13 +58,15 @@ class Viewer(QGraphicsView):
         self.scene_.setSceneRect(self.pix.boundingRect())
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def show_overlay(self, path, dx=0, dy=0, opacity=0.5):
+    def show_overlay(self, path, dx=0, dy=0, opacity=0.5, rotation_deg=0, scale=1):
         if self.overlay:
             self.scene_.removeItem(self.overlay)
             self.overlay.close()
         self.overlay = TiledImage(path)
         self.overlay.setZValue(1)
         self.overlay.setPos(dx, dy)
+        self.overlay.setRotation(rotation_deg)
+        self.overlay.setScale(scale)
         self.overlay.setOpacity(opacity)
         self.scene_.addItem(self.overlay)
 
@@ -88,7 +92,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.10.3 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.11.0 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -114,7 +118,7 @@ class MainWindow(QMainWindow):
             ("Stitch SEM image folder", self.import_folder),
             ("Mark point", self.toggle_mark),
             ("Overlay layer", self.choose_overlay),
-            ("Align overlay (dx,dy)", self.align_overlay),
+            ("Manual overlay correction...", self.align_overlay),
             ("Auto-align overlay", self.auto_align_overlay),
             ("Build TIFF pyramid", self.create_pyramid),
             ("Detect trace candidates", self.detect_candidates),
@@ -148,7 +152,7 @@ class MainWindow(QMainWindow):
         groups = {
             "Project": {"New project", "Open project"},
             "Layers": {"Stitch selected SEM images", "Stitch SEM image folder", "Overlay layer",
-                       "Align overlay (dx,dy)", "Auto-align overlay", "Build TIFF pyramid"},
+                       "Manual overlay correction...", "Auto-align overlay", "Build TIFF pyramid"},
             "Annotations": {"Mark point", "Clear all annotations..."},
             "Traces": {"Detect trace candidates", "Accept selected", "Reject selected",
                        "Delete selected", "Resize selected", "Connect selected", "Remove selected links"},
@@ -221,7 +225,7 @@ class MainWindow(QMainWindow):
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS layers (name TEXT PRIMARY KEY, path TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS markers (id INTEGER PRIMARY KEY, layer TEXT, x REAL, y REAL, label TEXT)")
-            db.execute("CREATE TABLE IF NOT EXISTS alignments (base TEXT, overlay TEXT, dx REAL, dy REAL, PRIMARY KEY(base,overlay))")
+            ensure_alignment_schema(db)
             ensure_schema(db)
         self.refresh_layers()
 
@@ -235,7 +239,7 @@ class MainWindow(QMainWindow):
             self.project = None
             return
         with self.db() as db:
-            db.execute("CREATE TABLE IF NOT EXISTS alignments (base TEXT, overlay TEXT, dx REAL, dy REAL, PRIMARY KEY(base,overlay))")
+            ensure_alignment_schema(db)
         self.refresh_layers()
 
     def refresh_layers(self):
@@ -400,27 +404,88 @@ class MainWindow(QMainWindow):
             return
         with self.db() as db:
             path = db.execute("SELECT path FROM layers WHERE name=?", (name,)).fetchone()[0]
-            row = db.execute("SELECT dx,dy FROM alignments WHERE base=? AND overlay=?", (self.current_layer, name)).fetchone()
-        self.viewer.show_overlay(path, *(row or (0, 0)), self.opacity.value()/100)
+            try:
+                parameters = alignment_parameters(load_alignment(db, self.current_layer, name))
+            except ValueError as exc:
+                if "No saved alignment" not in str(exc):
+                    QMessageBox.warning(self, "Invalid alignment", str(exc))
+                    return
+                parameters = (0, 0, 0, 1)
+        dx, dy, angle, scale = parameters
+        self.viewer.show_overlay(path, dx, dy, self.opacity.value()/100, angle, scale)
         self.overlay_layer = name
 
     def align_overlay(self):
         if not self.overlay_layer or not self.viewer.overlay:
+            QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
             return
-        dx, ok = QInputDialog.getDouble(self, "Translation registration", "X offset in pixels:", self.viewer.overlay.pos().x(), -1000000, 1000000, 2)
-        if not ok:
-            return
-        dy, ok = QInputDialog.getDouble(self, "Translation registration", "Y offset in pixels:", self.viewer.overlay.pos().y(), -1000000, 1000000, 2)
-        if not ok:
-            return
-        self.viewer.overlay.setPos(dx, dy)
-        with self.db() as db:
-            db.execute("INSERT OR REPLACE INTO alignments(base,overlay,dx,dy) VALUES (?,?,?,?)",
-                       (self.current_layer, self.overlay_layer, dx, dy))
+        overlay = self.viewer.overlay
+        original = (overlay.pos().x(), overlay.pos().y(), overlay.rotation(), overlay.scale())
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manual overlay correction")
+        form = QFormLayout(dialog)
+        note = QLabel("Live preview; Save stores this layer pair for GUI and MCP.\n"
+                      "Rotation is clockwise around the overlay's top-left (0,0);\n"
+                      "scaling and rotation precede the X/Y offsets.", dialog)
+        form.addRow(note)
+        boxes = []
+        specs = [("X offset (base pixels)", original[0], -1000000, 1000000, 2, 1),
+                 ("Y offset (base pixels)", original[1], -1000000, 1000000, 2, 1),
+                 ("Clockwise rotation (degrees)", original[2], -360, 360, 4, .01),
+                 ("Uniform scale (%)", original[3]*100, 1, 10000, 4, .01)]
+        for label, value, low, high, decimals, step in specs:
+            box = QDoubleSpinBox(dialog)
+            box.setRange(low, high)
+            box.setDecimals(decimals)
+            box.setSingleStep(step)
+            box.setValue(value)
+            form.addRow(label, box)
+            boxes.append(box)
+        def preview():
+            overlay.setPos(boxes[0].value(), boxes[1].value())
+            overlay.setRotation(boxes[2].value())
+            overlay.setScale(boxes[3].value()/100)
+        for box in boxes:
+            box.valueChanged.connect(preview)
+        reset = QPushButton("Reset to original image coordinates", dialog)
+        def reset_values():
+            for box, value in zip(boxes, (0, 0, 0, 100)):
+                box.setValue(value)
+        reset.clicked.connect(reset_values)
+        form.addRow(reset)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save |
+                                  QDialogButtonBox.StandardButton.Cancel, parent=dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        saved = False
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                with self.db() as db:
+                    save_alignment(db, self.current_layer, self.overlay_layer,
+                                   boxes[0].value(), boxes[1].value(),
+                                   boxes[2].value(), boxes[3].value()/100)
+                saved = True
+                self.statusBar().showMessage(
+                    f"Saved manual correction: dx={boxes[0].value():.2f}, dy={boxes[1].value():.2f}, "
+                    f"rotation={boxes[2].value():.4f} deg, scale={boxes[3].value():.4f}%")
+        except (sqlite3.Error, ValueError) as exc:
+            QMessageBox.warning(self, "Alignment not saved", str(exc))
+        finally:
+            if not saved:
+                overlay.setPos(original[0], original[1])
+                overlay.setRotation(original[2])
+                overlay.setScale(original[3])
 
     def auto_align_overlay(self):
         if not self.current_layer or not self.overlay_layer:
             QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
+            return
+        if self.viewer.overlay and (abs(self.viewer.overlay.rotation()) > 1e-9 or
+                                    abs(self.viewer.overlay.scale()-1) > 1e-9):
+            QMessageBox.information(self, "Manual correction active",
+                "Automatic alignment currently estimates translation only.\n"
+                "Keep your manual rotation/scale, or reset them in Manual overlay correction first.")
             return
         with self.db() as db:
             base = db.execute("SELECT path FROM layers WHERE name=?", (self.current_layer,)).fetchone()[0]
@@ -437,8 +502,7 @@ class MainWindow(QMainWindow):
                 return
             self.viewer.overlay.setPos(dx, dy)
             with self.db() as db:
-                db.execute("INSERT OR REPLACE INTO alignments(base,overlay,dx,dy) VALUES (?,?,?,?)",
-                           (self.current_layer, self.overlay_layer, dx, dy))
+                save_alignment(db, self.current_layer, self.overlay_layer, dx, dy)
             self.statusBar().showMessage(f"Auto alignment: dx={dx:.1f}, dy={dy:.1f}, response={confidence:.3f}")
         except Exception as exc:
             QMessageBox.warning(self, "Registration failed", str(exc))
@@ -885,6 +949,18 @@ class MainWindow(QMainWindow):
             return
         active,ok=QInputDialog.getItem(self,"MOS crossing detector","ACTIVE mask layer:",options,0,False)
         if not ok:
+            return
+        with self.db() as db:
+            try:
+                transform = alignment_parameters(load_alignment(db, self.current_layer, active))
+            except ValueError:
+                transform = None
+        if transform is None or any(abs(v-target) > 1e-8
+                                    for v,target in zip(transform,(0,0,0,1))):
+            QMessageBox.information(self, "MOS detection",
+                "This detector requires pixel-aligned POLY/ACTIVE masks. "
+                "Saved overlay corrections are currently supported by the viewer, MCP comparisons "
+                "and via pairing, but not this mask detector.")
             return
         polarity,ok=QInputDialog.getItem(self,"POLY mask","POLY foreground:",["bright","dark"],0,False)
         if not ok:
