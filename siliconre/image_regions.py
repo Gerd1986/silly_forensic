@@ -75,7 +75,8 @@ def render_region(path, rectangle, max_side=1024, matrix=None):
     x0, x1 = max(0, math.floor(sx.min())-step), min(sw, math.ceil(sx.max())+step+1)
     y0, y1 = max(0, math.floor(sy.min())-step), min(sh, math.ceil(sy.max())+step+1)
     # Long thin rotated requests still obey the intermediate allocation cap.
-    while math.ceil((x1-x0)/step)*math.ceil((y1-y0)/step) > MAX_SOURCE_PREVIEW_PIXELS:
+    while (math.ceil((x1-x0)/step)*math.ceil((y1-y0)/step) > MAX_SOURCE_PREVIEW_PIXELS or
+           max(math.ceil((x1-x0)/step), math.ceil((y1-y0)/step)) > 8192):
         step += max(1, step//4)
     preview = _source_preview(path, (x0, y0, x1, y1), step)
     def centers(start, end):

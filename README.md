@@ -333,7 +333,7 @@ To restore, close SiliconRE, keep a copy of the current database, and replace
 `project.sqlite3` with the chosen backup database. Existing exported files are untouched.
 
 
-## Manual layer correction and MCP image screening (v1.11.0)
+## Manual layer correction and MCP image screening (v1.11.1)
 
 Choose a base layer, then **Layers → Overlay layer**, then
 **Layers → Manual overlay correction...**. The dialog previews X/Y offset,

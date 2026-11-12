@@ -56,3 +56,13 @@ class ImageRegionTests(unittest.TestCase):
                            ((float('nan'),0,10,10),64), ((0,0,1e10,10),64)]:
             with self.assertRaises(ValueError):
                 render_region('missing.tif',rect,side)
+
+    def test_very_wide_thin_tiff_has_bounded_remap_dimensions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'wide.tif'
+            tifffile.imwrite(path,np.full((2,40000),123,dtype=np.uint8))
+            gray, mask, meta = render_region(path,(0,0,40000,2),128)
+            self.assertEqual(gray.shape,(1,128))
+            self.assertTrue(mask.all())
+            self.assertTrue((gray==123).all())
+            self.assertGreaterEqual(meta['source_sampling_step'],5)
