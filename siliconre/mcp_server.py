@@ -7,7 +7,7 @@ import os
 import sqlite3
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
-from mcp.types import TextContent, ImageContent
+from mcp.types import TextContent, ImageContent, ToolAnnotations
 from image_regions import render_region, png_bytes, layer_path, region_geometry
 from image_preview import image_size
 from layer_alignment import load_alignment, alignment_parameters
@@ -20,6 +20,7 @@ from devices import resolve_devices, spice_netlist
 from mos_detection import list_mos_candidates
 from debug_ports import analyze_debug_interfaces
 from logic_analysis import analyze_sequential
+import analysis_store as research
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -218,7 +219,8 @@ def get_layer_region(layer: str, x: float, y: float, width: float, height: float
 @server.tool()
 def compare_layer_region(base_layer: str, overlay_layer: str,
                          x: float, y: float, width: float, height: float,
-                         max_side: int = 1024, opacity: float = .5):
+                         max_side: int = 1024, opacity: float = .5,
+                         alignment_id: str = ""):
     """Return base, aligned overlay and blended PNGs on ONE base-coordinate grid.
     Applies the saved dx/dy, clockwise rotation and uniform scale, including reverse pairs.
     Requires saved alignment; never guesses identity for unaligned layers.
@@ -230,7 +232,12 @@ def compare_layer_region(base_layer: str, overlay_layer: str,
     with visual_connect() as db:
         base_path = layer_path(db, PROJECT, base_layer)
         overlay_path = layer_path(db, PROJECT, overlay_layer)
-        matrix = load_alignment(db, base_layer, overlay_layer)
+        registration = None
+        if alignment_id:
+            matrix, registration = research.region_matrix(
+                db, alignment_id, base_layer, overlay_layer, (x,y,width,height))
+        else:
+            matrix = load_alignment(db, base_layer, overlay_layer)
     rectangle = (x,y,width,height)
     base, bm, base_meta = render_region(base_path, rectangle, max_side)
     overlay, om, overlay_meta = render_region(overlay_path, rectangle, max_side, matrix)
@@ -242,6 +249,8 @@ def compare_layer_region(base_layer: str, overlay_layer: str,
             "overlay_layer": overlay_layer, "base": base_meta, "overlay": overlay_meta,
             "opacity": opacity, "common_covered_fraction": float(both.mean()),
             "verified": False, "note": "Visual comparison using saved registration; no electrical inference"}
+    if registration:
+        meta['regional_alignment'] = registration
     return _image_result(meta, [(base_layer+" in base coordinates", base, bm),
                                (overlay_layer+" aligned into base coordinates", overlay, om),
                                ("Blended comparison", blend, bm | om)])
@@ -273,6 +282,134 @@ def plan_layer_scan(layer: str, tile_width: int = 4096, tile_height: int = 4096,
     next_index = start_index+len(tiles)
     return {"coordinate_frame": layer, "source_size": [width,height], "total_tiles": total,
             "tiles": tiles, "next_index": next_index if next_index < total else None}
+
+
+def _check_source_points(db, layer, points):
+    width, height = image_size(layer_path(db, PROJECT, layer))
+    for point in points:
+        if len(point) != 2 or not all(math.isfinite(float(v)) for v in point):
+            raise ValueError("Expected finite source X/Y coordinates")
+        if not 0 <= float(point[0]) < width or not 0 <= float(point[1]) < height:
+            raise ValueError(f"Point outside original {layer} image")
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def list_analysis_records(record_type: str = "", layer: str = "", status: str = "") -> list[dict]:
+    """Read regional registrations and source-coordinate evidence without migrating the project.
+    record_type: alignment/evidence; status: candidate/confirmed/rejected. No electrical inference.
+    """
+    with visual_connect() as db:
+        return research.list_records(db, record_type, layer, status)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def save_regional_alignment(base_layer: str, overlay_layer: str, roi: list[float], name: str,
+                            reference_points: list[dict] | None = None,
+                            matrix: list[list[float]] | None = None, fit_mode: str = "similarity",
+                            status: str = "candidate", note: str = "", record_id: str | None = None,
+                            expected_revision: int | None = None) -> dict:
+    """WRITE a reversible local overlay->base registration, never the global alignment.
+    ROI=[x,y,width,height] in base pixels. Reference pairs: {source:[x,y],target:[x,y],check:false}.
+    Fits similarity/affine from training pairs unless an explicit 3x3 matrix is supplied.
+    check:true pairs are held out of fitting; returns their measured residuals, not confidence.
+    Confirmed requires a review note and independent check pair; it never proves electrical contact.
+    Updating requires record_id and its current expected_revision. Images are never rewritten.
+    """
+    with connect() as db:
+        if len(roi) != 4:
+            raise ValueError("ROI must have four values")
+        w,h = image_size(layer_path(db, PROJECT, base_layer))
+        layer_path(db, PROJECT, overlay_layer)
+        if roi[0]+roi[2] > w or roi[1]+roi[3] > h:
+            raise ValueError("ROI exceeds base image")
+        for p in reference_points or []:
+            _check_source_points(db, overlay_layer, [p['source']])
+            _check_source_points(db, base_layer, [p['target']])
+        return research.save_region(db, base_layer, overlay_layer, roi, name, reference_points,
+                                    matrix, fit_mode, status, note, record_id, expected_revision)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def save_analysis_evidence(kind: str, geometry: list[dict], label: str = "",
+                           status: str = "candidate", note: str = "", references: list[str] | None = None,
+                           record_id: str | None = None, expected_revision: int | None = None,
+                           provenance: dict | None = None) -> dict:
+    """WRITE reversible point/trace/contact/region/note evidence in original layer pixels.
+    Geometry=[{layer:'M1',points:[[x,y],...]}]. A contact has one point on EACH of two layers.
+    Confirmed/rejected require a review note. references contains existing research record IDs.
+    A confirmed contact is a documented review claim, never an automatic electrical graph edge.
+    Updates require current expected_revision. Candidate is the default.
+    """
+    with connect() as db:
+        for g in geometry:
+            _check_source_points(db, g['layer'], g['points'])
+        return research.save_evidence(db, kind, geometry, label, status, note,
+                                      references, record_id, expected_revision, provenance=provenance)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def preview_trace_paths(layer: str, x: int, y: int, width: int, height: int,
+                        threshold: int = 0, min_area: int = 20, invert: bool = False) -> dict:
+    """Read-only native-pixel conductor centerlines, not boxes or bounding-box links.
+    Threshold + thinning; no gap bridging. Splits at branches and retains loops.
+    Returns ordered pixel-center vertices, junctions and ROI-clipping warnings.
+    At most 2 million ROI pixels / 20,000 output vertices; use smaller crops for dense wiring.
+    Image paths are unverified: neither physical contacts nor electrical nets are inferred.
+    """
+    from trace_paths import extract_paths
+    with visual_connect() as db:
+        path=layer_path(db,PROJECT,layer)
+    return dict(layer=layer,**extract_paths(path,[x,y,width,height],threshold,min_area,invert))
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def extract_trace_paths(layer: str, x: int, y: int, width: int, height: int,
+                        threshold: int = 0, min_area: int = 20, invert: bool = False) -> dict:
+    """WRITE native-pixel centerline polylines as candidate research traces in one atomic batch.
+    Same extraction as preview_trace_paths; no rectangle-center shortcuts, gap bridging or
+    automatic electrical acceptance. Stores parameters, source ROI and endpoint/branch metadata.
+    Use list_analysis_records to inspect/edit saved paths and research undo to reverse saves.
+    """
+    from trace_paths import extract_paths,save_paths
+    with visual_connect() as db:
+        path=layer_path(db,PROJECT,layer)
+    result=extract_paths(path,[x,y,width,height],threshold,min_area,invert)
+    with connect() as db:
+        records=save_paths(db,layer,result)
+    return dict(layer=layer,roi=result['roi'],threshold=result['threshold'],records=records,
+                status='candidate',junctions=result['junctions'],electrically_verified=False)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False))
+def delete_analysis_record(record_id: str, expected_revision: int) -> dict:
+    """WRITE a reversible deletion of one research record; refuses stale or referenced records.
+    Does not delete original images, legacy annotations or reconstructed electrical nets.
+    """
+    with connect() as db:
+        return research.delete_record(db, record_id, expected_revision)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def list_analysis_history(limit: int = 50) -> list[dict]:
+    """Read persistent undo/redo history for research edits only, including GUI and MCP edits."""
+    with visual_connect() as db:
+        return research.history(db, limit)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def undo_analysis_change(expected_seq: int) -> dict:
+    """WRITE: undo the latest active research edit. Supply its seq from list_analysis_history.
+    Refuses when history has changed. Legacy editing actions have a separate lifecycle.
+    """
+    with connect() as db:
+        return research.undo_redo(db, expected_seq=expected_seq)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def redo_analysis_change(expected_seq: int) -> dict:
+    """WRITE: redo the earliest undone active research edit with a history sequence guard."""
+    with connect() as db:
+        return research.undo_redo(db, redo=True, expected_seq=expected_seq)
 
 
 if __name__ == "__main__":
