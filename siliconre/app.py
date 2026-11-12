@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QDockWidget, QListWidget, QToolBar, QSlider, QLabel, QProgressDialog
 )
 
+from annotations import clear_annotations, backup_annotations
 from tiles import TiledImage
 from registration import estimate_translation
 from pyramid import build_pyramid
@@ -80,12 +81,13 @@ class Viewer(QGraphicsView):
     def draw_marker(self, x, y, label):
         r = 5
         dot = self.scene_.addEllipse(x-r, y-r, 2*r, 2*r, QPen(QColor("#ffcc00"), 2))
+        dot.setData(0, "marker")
         dot.setToolTip(label)
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.10.2 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.10.3 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -104,9 +106,7 @@ class MainWindow(QMainWindow):
         opacity_dock = QDockWidget("Overlay opacity", self)
         opacity_dock.setWidget(self.opacity)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, opacity_dock)
-        bar = QToolBar("Project", self)
-        self.addToolBar(bar)
-        for title, callback in [
+        actions = [
             ("New project", self.new_project),
             ("Open project", self.open_project),
             ("Stitch selected SEM images", self.import_images),
@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
             ("Reject selected", lambda: self.review_selected("rejected")),
             ("Delete selected", self.delete_selected),
             ("Resize selected", self.resize_selected),
+            ("Clear all annotations...", self.clear_all_annotations),
             ("Export candidates CSV", self.export_candidates),
             ("Connect selected", self.connect_selected),
             ("Remove selected links", self.remove_selected_links),
@@ -142,14 +143,71 @@ class MainWindow(QMainWindow):
             ("Annotate logic cell", self.annotate_logic),
             ("Analyze sequential logic", self.analyze_logic),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
-        ]:
-            act = QAction(title, self)
-            act.triggered.connect(callback)
-            bar.addAction(act)
+        ]
+        groups = {
+            "Project": {"New project", "Open project"},
+            "Layers": {"Stitch selected SEM images", "Stitch SEM image folder", "Overlay layer",
+                       "Align overlay (dx,dy)", "Auto-align overlay", "Build TIFF pyramid"},
+            "Annotations": {"Mark point", "Clear all annotations..."},
+            "Traces": {"Detect trace candidates", "Accept selected", "Reject selected",
+                       "Delete selected", "Resize selected", "Connect selected", "Remove selected links"},
+            "Vias": {"Detect via candidates", "Review nearest via", "Associate via to trace",
+                     "Connect vias across layers", "Suggest aligned via pairs"},
+            "Devices": {"Add MOS transistor", "Delete MOS transistor", "Detect MOS candidates",
+                        "Review MOS candidate", "Annotate logic cell"},
+            "Analysis": {"Analyze debug port clues", "Analyze sequential logic"},
+            "Export": {"Export candidates CSV", "Export manual nets JSON", "Export vias JSON",
+                       "Export reconstructed nets", "Export transistor netlist", "Export MOS candidates JSON"},
+            "View": {"Fit"},
+        }
+        menus = {name: self.menuBar().addMenu(name) for name in groups}
+        toolbar = QToolBar("Quick access", self)
+        toolbar.setObjectName("quick_access")
+        self.addToolBar(toolbar)
+        self.actions_by_title = {}
+        for title, callback in actions:
+            action = QAction(title, self)
+            action.triggered.connect(callback)
+            self.actions_by_title[title] = action
+            group = next(name for name, titles in groups.items() if title in titles)
+            if title == "Clear all annotations...":
+                menus[group].addSeparator()
+            menus[group].addAction(action)
+            if title in {"Open project", "Mark point", "Overlay layer", "Fit"}:
+                toolbar.addAction(action)
         self.statusBar().showMessage("Create or open a project to begin")
 
     def db(self):
         return sqlite3.connect(str(self.project / "project.sqlite3"))
+
+    def clear_all_annotations(self):
+        if not self.project:
+            QMessageBox.information(self, "Project required", "Create or open a project first")
+            return
+        answer = QMessageBox.warning(
+            self, "Clear all annotations",
+            "Delete ALL annotations on ALL layers?\n\n"
+            "This removes markers, trace/via/MOS candidates (including accepted and rejected), "
+            "manual links, transistor annotations and logic cells.\n"
+            "Images, layers and alignments are kept. A database backup is created first.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            with self.db() as db:
+                backup = backup_annotations(db, self.project)
+                deleted = clear_annotations(db)
+        except (OSError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, "Clear failed", str(exc))
+            return
+        for item in list(self.viewer.scene_.items()):
+            if isinstance(item, CandidateRect) or item.data(0) in {
+                    "marker", "manual_link", "via_candidate", "mos_candidate"}:
+                self.viewer.scene_.removeItem(item)
+        self.viewer.mark_mode = False
+        self.statusBar().showMessage(
+            f"Cleared {sum(deleted.values())} annotation records across all layers; backup: {backup}")
 
     def new_project(self):
         folder = QFileDialog.getExistingDirectory(self, "Choose project directory")

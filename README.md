@@ -314,3 +314,20 @@ phase correlation. Those weak matches must not be applied as verified alignment.
 No source TIFF, annotation or existing project alignment was modified by validation.
 
 Restart with v1.10.2 and reopen the existing project; restitching is unnecessary.
+
+
+
+## Grouped menus and global annotation clear (v1.10.3)
+
+Commands are grouped under Project, Layers, Annotations, Traces, Vias, Devices,
+Analysis, Export and View. The compact quick-access toolbar keeps Open project,
+Mark point, Overlay layer and Fit visible.
+
+**Annotations → Clear all annotations...** clears the whole project's markers,
+trace/via/MOS candidates (all review states), manual connections, MOS devices
+and logic cells/pin mappings across every layer. Confirmation defaults to Cancel.
+Layers, source and stitched images, and alignment offsets are retained.
+Before deletion a complete SQLite backup is saved in the project's
+`annotation_backups` folder. If backup or deletion fails, annotations are retained.
+To restore, close SiliconRE, keep a copy of the current database, and replace
+`project.sqlite3` with the chosen backup database. Existing exported files are untouched.
