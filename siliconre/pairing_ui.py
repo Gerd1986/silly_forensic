@@ -161,6 +161,15 @@ class PairDialog(QDialog):
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(lambda:_guard(self,self.save));buttons.rejected.connect(self.reject);root.addWidget(buttons)
         self.fill_table();self.use_roi_label()
+        self.mode.currentTextChanged.connect(self.invalidate_fit)
+
+    def invalidate_fit(self,*args):
+        self.status.setCurrentText('candidate')
+        self.table.blockSignals(True)
+        for row in range(self.table.rowCount()):
+            item=QTableWidgetItem('—');item.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);self.table.setItem(row,3,item)
+        self.table.blockSignals(False)
+        self.message.setText('Reference roles, model or validity region changed. Calculate and inspect the residuals again.')
 
     def change_overlay(self):
         layer=self.overlay.currentText();iw,ih=image_size(self.paths[layer]);x,y,w,h=self.left.roi
@@ -200,12 +209,12 @@ class PairDialog(QDialog):
     def change_role(self,item):
         if item.column()!=0:return
         self.pairs[item.row()]['check']=item.checkState()==Qt.CheckState.Checked
-        self.status.setCurrentText('candidate');self.fill_table()
+        self.status.setCurrentText('candidate');self.fill_table();self.invalidate_fit()
 
     def remove_pair(self):
         row=self.table.currentRow()
         if row>=0:del self.pairs[row]
-        self.pending=None;self.status.setCurrentText('candidate');self.fill_table()
+        self.pending=None;self.status.setCurrentText('candidate');self.fill_table();self.invalidate_fit()
 
     def redraw(self):
         self.left.view.clear_marks();self.right.view.clear_marks()
@@ -213,7 +222,7 @@ class PairDialog(QDialog):
             self.left.view.mark(p['target'],i+1,p['check']);self.right.view.mark(p['source'],i+1,p['check'])
         if self.pending:self.left.view.mark(self.pending,'next',self.pending_check)
 
-    def use_roi(self):self.valid_roi=list(self.left.roi);self.use_roi_label()
+    def use_roi(self):self.valid_roi=list(self.left.roi);self.use_roi_label();self.invalidate_fit()
     def use_roi_label(self):self.roi_label.setText('Validity ROI in base pixels: '+str(self.valid_roi) if not self.contact else 'Each contact point keeps its own source-layer coordinates.')
 
     def calculate(self):

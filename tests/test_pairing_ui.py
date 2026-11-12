@@ -69,6 +69,14 @@ class PairingUITests(unittest.TestCase):
         d.reject()
         with self.w.db() as db:self.assertEqual(store.list_records(db),[])
 
+    def test_model_change_clears_old_residuals_and_review_status(self):
+        d=self.pair_dialog()
+        for target,source in (([20,20],[25,27]),([120,20],[125,27]),([20,120],[25,127])):
+            d.pick_target(*target);d.pick_source(*source)
+        d.calculate();d.status.setCurrentText('confirmed');d.mode.setCurrentText('affine')
+        self.assertEqual(d.status.currentText(),'candidate')
+        self.assertEqual(d.table.item(0,3).text(),'—')
+
     def test_contact_review_requires_reload_after_settings_and_keeps_snapshot(self):
         with self.w.db() as db:c=store.save_evidence(db,'contact',[dict(layer='M1',points=[[20,20]]),dict(layer='M2',points=[[25,27]])])
         d=ContactReviewDialog(self.w,c);self.dialogs.append(d)
