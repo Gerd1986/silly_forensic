@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPointF, QEventLoop
-from PySide6.QtGui import QAction, QPixmap, QPen, QColor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPolygonF, QPixmap, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsScene,
     QGraphicsView, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
@@ -34,6 +34,34 @@ from batch_import import images_in_folder
 from stitching import stitch_images
 from tile_grid import stitch_tile_grid, plan_tile_grid, parse_tile
 
+def mouse_tool_icon(kind):
+    """Native vector icons, independent of theme or external icon files."""
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#202020"), 1.5))
+    painter.setBrush(QColor("#ffffff"))
+    if kind == "pointer":
+        points = [(4,2),(4,21),(9,16),(13,23),(17,21),(13,14),(21,14)]
+    elif kind == "overlay":
+        points = [(4,12),(6,11),(9,14),(9,5),(11,4),(13,5),(13,11),
+                  (13,3),(15,2),(17,3),(17,11),(18,5),(20,5),(21,7),
+                  (21,16),(19,21),(11,22),(7,18)]
+    else:
+        painter.setBrush(QColor("#ffcc00"))
+        painter.drawEllipse(8,8,8,8)
+        painter.drawLine(12,2,12,8)
+        painter.drawLine(12,16,12,22)
+        painter.drawLine(2,12,8,12)
+        painter.drawLine(16,12,22,12)
+        painter.end()
+        return QIcon(pixmap)
+    painter.drawPolygon(QPolygonF([QPointF(x,y) for x,y in points]))
+    painter.end()
+    return QIcon(pixmap)
+
+
 class Viewer(QGraphicsView):
     def __init__(self, window):
         super().__init__()
@@ -44,9 +72,46 @@ class Viewer(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.pix = None
         self.overlay = None
-        self.mark_mode = False
+        self.mouse_mode = "pointer"
+        self._overlay_drag = None
+        self._update_mouse_cursor()
+
+    @property
+    def mark_mode(self):
+        return self.mouse_mode == "mark"
+
+    @mark_mode.setter
+    def mark_mode(self, enabled):
+        self.set_mouse_mode("mark" if enabled else "pointer")
+
+    def _update_mouse_cursor(self):
+        cursor = (Qt.CursorShape.ClosedHandCursor if self._overlay_drag else
+                  Qt.CursorShape.OpenHandCursor if self.mouse_mode == "overlay" else
+                  Qt.CursorShape.CrossCursor if self.mouse_mode == "mark" else
+                  Qt.CursorShape.ArrowCursor)
+        self.viewport().setCursor(cursor)
+
+    def set_mouse_mode(self, mode):
+        if mode not in ("pointer", "mark", "overlay"):
+            raise ValueError("Unknown mouse mode")
+        self.cancel_overlay_drag()
+        self.mouse_mode = mode
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag if mode == "pointer"
+                         else QGraphicsView.DragMode.NoDrag)
+        self._update_mouse_cursor()
+        if hasattr(self.window, "mouse_actions"):
+            for name, action in self.window.mouse_actions.items():
+                action.setChecked(name == mode)
+
+    def cancel_overlay_drag(self):
+        if self._overlay_drag:
+            item, start, _ = self._overlay_drag
+            item.setPos(start)
+            self._overlay_drag = None
+        self._update_mouse_cursor()
 
     def show_image(self, path):
+        self.set_mouse_mode("pointer")
         if self.pix:
             self.pix.close()
         if self.overlay:
@@ -59,6 +124,7 @@ class Viewer(QGraphicsView):
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
     def show_overlay(self, path, dx=0, dy=0, opacity=0.5, rotation_deg=0, scale=1):
+        self.cancel_overlay_drag()
         if self.overlay:
             self.scene_.removeItem(self.overlay)
             self.overlay.close()
@@ -71,17 +137,52 @@ class Viewer(QGraphicsView):
         self.scene_.addItem(self.overlay)
 
     def wheelEvent(self, event):
+        self.cancel_overlay_drag()
         factor = 1.2 if event.angleDelta().y() > 0 else 1 / 1.2
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.scale(factor, factor)
 
     def mousePressEvent(self, event):
-        if self.mark_mode and self.pix and event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             p = self.mapToScene(event.position().toPoint())
-            if self.pix.boundingRect().contains(self.pix.mapFromScene(p)):
-                self.window.add_marker(p.x(), p.y())
+            if self.mouse_mode == "overlay":
+                if self.overlay and self.overlay.boundingRect().contains(self.overlay.mapFromScene(p)):
+                    self.cancel_overlay_drag()
+                    self._overlay_drag = (self.overlay, QPointF(self.overlay.pos()), p)
+                    self._update_mouse_cursor()
+                event.accept()
+                return
+            if self.mark_mode:
+                if self.pix and self.pix.boundingRect().contains(self.pix.mapFromScene(p)):
+                    self.window.add_marker(p.x(), p.y())
+                event.accept()
                 return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._overlay_drag:
+            item, start, press = self._overlay_drag
+            item.setPos(start + self.mapToScene(event.position().toPoint()) - press)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._overlay_drag and event.button() == Qt.MouseButton.LeftButton:
+            item, start, press = self._overlay_drag
+            item.setPos(start + self.mapToScene(event.position().toPoint()) - press)
+            self._overlay_drag = None
+            self._update_mouse_cursor()
+            if item.pos() != start:
+                self.window.save_overlay_drag(item, start)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+        self._update_mouse_cursor()
+
+    def focusOutEvent(self, event):
+        self.cancel_overlay_drag()
+        super().focusOutEvent(event)
 
     def draw_marker(self, x, y, label):
         r = 5
@@ -92,7 +193,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.11.1 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.11.2 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -116,7 +217,9 @@ class MainWindow(QMainWindow):
             ("Open project", self.open_project),
             ("Stitch selected SEM images", self.import_images),
             ("Stitch SEM image folder", self.import_folder),
+            ("Pointer / neutral", self.pointer_mode),
             ("Mark point", self.toggle_mark),
+            ("Move overlay", self.move_overlay_mode),
             ("Overlay layer", self.choose_overlay),
             ("Manual overlay correction...", self.align_overlay),
             ("Auto-align overlay", self.auto_align_overlay),
@@ -152,7 +255,7 @@ class MainWindow(QMainWindow):
         groups = {
             "Project": {"New project", "Open project"},
             "Layers": {"Stitch selected SEM images", "Stitch SEM image folder", "Overlay layer",
-                       "Manual overlay correction...", "Auto-align overlay", "Build TIFF pyramid"},
+                       "Manual overlay correction...", "Move overlay", "Auto-align overlay", "Build TIFF pyramid"},
             "Annotations": {"Mark point", "Clear all annotations..."},
             "Traces": {"Detect trace candidates", "Accept selected", "Reject selected",
                        "Delete selected", "Resize selected", "Connect selected", "Remove selected links"},
@@ -163,23 +266,41 @@ class MainWindow(QMainWindow):
             "Analysis": {"Analyze debug port clues", "Analyze sequential logic"},
             "Export": {"Export candidates CSV", "Export manual nets JSON", "Export vias JSON",
                        "Export reconstructed nets", "Export transistor netlist", "Export MOS candidates JSON"},
-            "View": {"Fit"},
+            "View": {"Pointer / neutral", "Fit"},
         }
         menus = {name: self.menuBar().addMenu(name) for name in groups}
         toolbar = QToolBar("Quick access", self)
         toolbar.setObjectName("quick_access")
         self.addToolBar(toolbar)
         self.actions_by_title = {}
+        self.mouse_action_group = QActionGroup(self)
+        self.mouse_action_group.setExclusive(True)
+        self.mouse_actions = {}
         for title, callback in actions:
             action = QAction(title, self)
             action.triggered.connect(callback)
             self.actions_by_title[title] = action
+            mouse_mode = {"Pointer / neutral": "pointer", "Mark point": "mark",
+                          "Move overlay": "overlay"}.get(title)
+            if mouse_mode:
+                action.setCheckable(True)
+                action.setIcon(mouse_tool_icon(mouse_mode))
+                self.mouse_action_group.addAction(action)
+                self.mouse_actions[mouse_mode] = action
+                if mouse_mode == "pointer":
+                    action.setShortcut("Esc")
+                    action.setToolTip("Pointer / neutral (Esc): leave marking or cancel an overlay drag; keep annotations")
+                elif mouse_mode == "mark":
+                    action.setToolTip("Mark point: click the image; click again or press Esc to leave this mode")
+                else:
+                    action.setToolTip("Move overlay: drag with the left mouse button; release saves; Esc cancels the drag")
             group = next(name for name, titles in groups.items() if title in titles)
             if title == "Clear all annotations...":
                 menus[group].addSeparator()
             menus[group].addAction(action)
-            if title in {"Open project", "Mark point", "Overlay layer", "Fit"}:
+            if title in {"Open project", "Pointer / neutral", "Mark point", "Move overlay", "Overlay layer", "Fit"}:
                 toolbar.addAction(action)
+        self.viewer.set_mouse_mode("pointer")
         self.statusBar().showMessage("Create or open a project to begin")
 
     @contextmanager
@@ -221,6 +342,7 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Choose project directory")
         if not folder:
             return
+        self.viewer.set_mouse_mode("pointer")
         self.project = Path(folder)
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS layers (name TEXT PRIMARY KEY, path TEXT NOT NULL)")
@@ -233,6 +355,7 @@ class MainWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(self, "Open project directory")
         if not folder:
             return
+        self.viewer.set_mouse_mode("pointer")
         self.project = Path(folder)
         if not (self.project / "project.sqlite3").exists():
             QMessageBox.warning(self, "Invalid project", "No project.sqlite3 found")
@@ -1096,9 +1219,46 @@ class MainWindow(QMainWindow):
         if self.viewer.overlay:
             self.viewer.overlay.setOpacity(value/100)
 
+    def pointer_mode(self):
+        self.viewer.set_mouse_mode("pointer")
+        self.statusBar().showMessage("Pointer mode: select annotations or drag the view; annotations are kept")
+
     def toggle_mark(self):
-        self.viewer.mark_mode = not self.viewer.mark_mode
-        self.statusBar().showMessage("Click to mark a point" if self.viewer.mark_mode else "Pan mode")
+        if self.viewer.mouse_mode == "mark":
+            self.pointer_mode()
+        else:
+            self.viewer.set_mouse_mode("mark")
+            self.statusBar().showMessage("Mark point: click the image; Pointer or Esc exits without deleting annotations")
+
+    def move_overlay_mode(self):
+        if not self.viewer.overlay or not self.overlay_layer:
+            self.pointer_mode()
+            QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
+            return
+        if self.viewer.mouse_mode == "overlay":
+            self.pointer_mode()
+        else:
+            self.viewer.set_mouse_mode("overlay")
+            self.statusBar().showMessage("Drag overlay with the hand; release saves; Esc cancels the drag")
+
+    def save_overlay_drag(self, item, start):
+        try:
+            if not self.project or not self.current_layer or not self.overlay_layer or item is not self.viewer.overlay:
+                raise ValueError("No active overlay layer pair")
+            with self.db() as db:
+                save_alignment(db, self.current_layer, self.overlay_layer,
+                               item.pos().x(), item.pos().y(), item.rotation(), item.scale())
+        except (sqlite3.Error, ValueError) as exc:
+            item.setPos(start)
+            QMessageBox.warning(self, "Overlay position not saved", str(exc))
+            return
+        self.statusBar().showMessage(
+            f"Overlay position saved: dx={item.pos().x():.2f}, dy={item.pos().y():.2f}; "
+            "rotation and scale retained")
+
+    def closeEvent(self, event):
+        self.viewer.cancel_overlay_drag()
+        super().closeEvent(event)
 
     def add_marker(self, x, y):
         if not self.current_layer:

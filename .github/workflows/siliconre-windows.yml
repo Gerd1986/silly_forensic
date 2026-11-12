@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v1.11.1)'
+        description: 'Release tag (e.g. v1.11.2)'
         type: string
-        default: 'v1.11.1'
+        default: 'v1.11.2'
   push:
     branches: [main, feature/siliconre-v0.1]
     paths:
@@ -62,18 +62,20 @@ jobs:
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v1.11.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.11.2' || inputs.version }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.11.1' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.11.2' }
       - name: Publish GitHub release
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v1.11.1' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.11.2' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v1.11.1 preview.
+          SiliconRE v1.11.2 preview.
+          - Pointer, point-marker and hand-overlay mouse tools with explicit active state
+          - Drag overlay translation saved on release; Escape exits modes or cancels a drag
           - Manual overlay translation, clockwise rotation and uniform scale with live preview
           - Bounded MCP overview, region and aligned comparison PNG tools with coordinate metadata
           - Read-only visual screening grid and transform-aware via pairing

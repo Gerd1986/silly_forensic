@@ -397,3 +397,25 @@ No raw SEM sample images are included in this repository.
 
 Installing/connecting the MCP client remains a separate step: adding these tools
 does not automatically install a ChatGPT desktop plugin.
+
+
+## Mouse tools and hand overlay adjustment (v1.11.2)
+
+The quick-access toolbar includes three visible, mutually exclusive mouse tools:
+
+- **Pointer / neutral** (arrow icon, **Esc**): exit point marking or overlay mode
+  without deleting annotations. Select/move trace boxes as before, or drag the
+  background to pan the view.
+- **Mark point** (crosshair icon/cursor): click to annotate. Click the tool again,
+  select Pointer, or press Esc to leave this mode.
+- **Move overlay** (hand icon): choose an overlay layer first, then drag it with
+  the left mouse button. The cursor closes during dragging. The base image,
+  existing annotations and viewport stay in place.
+
+Overlay translation is measured in scene/base-image pixels at the current zoom.
+Releasing the mouse saves the layer-pair transform, retaining its rotation and
+scale, so MCP comparisons immediately use the new offset. A click without moving
+does not save. Escape, choosing Pointer, changing layers, losing focus, or closing
+the window cancels an unfinished drag. A database save failure restores the
+previous overlay position. Wheel zoom also cancels an unfinished drag.
+Use **Manual overlay correction...** for rotation, scale and numeric offsets.
