@@ -7,9 +7,9 @@ on:
         type: boolean
         default: false
       version:
-        description: 'Release tag (e.g. v1.12.0)'
+        description: 'Release tag (e.g. v1.12.1)'
         type: string
-        default: 'v1.12.0'
+        default: 'v1.12.1'
   push:
     branches: [main, feature/siliconre-v0.1, feature/mcp-research-writes]
     paths:
@@ -62,18 +62,21 @@ jobs:
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         shell: pwsh
         env:
-          TAG: ${{ github.event_name == 'push' && 'v1.12.0' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.12.1' || inputs.version }}
         run: |
-          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.12.0' }
+          if ($env:TAG -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must look like v1.12.1' }
       - name: Publish GitHub release
         if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && inputs.publish_release) }}
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'push' && 'v1.12.0' || inputs.version }}
+          TAG: ${{ github.event_name == 'push' && 'v1.12.1' || inputs.version }}
         shell: pwsh
         run: |
           $notes = @'
-          SiliconRE v1.12.0 preview.
+          SiliconRE v1.12.1 preview.
+          - Click reference/control pairs in independent source views; compute local similarity/affine fits
+          - Two/three-layer contact-review details with crop hashes, revision guards and saved review decisions
+          - MCP contact-detail images and guarded review writes using the same GUI workflow
           - Native-pixel centerline paths with branch/loop topology, ROI-clipping flags and MCP preview/write tools
           - Reversible MCP writes for regional registration, points, traces and cross-layer contact evidence
           - Independent check-point residuals, similarity/affine fitting and strict regional image bounds

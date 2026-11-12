@@ -519,8 +519,9 @@ are confirmed and red dashed records are rejected; tooltips show IDs and notes.
 - **Draw trace** lets you click source-image vertices. Enter opens the save/review
   dialog, Escape cancels. Pointer mode remains available throughout.
 - **Contact / region…** creates a two-layer contact, a visible-area polygon or a
-  coordinate-anchored note. For contacts, inspect the second layer and enter its
-  original X,Y explicitly; no correspondence is invented from a rough overlay.
+  coordinate-anchored note. Contacts now open two source views: click the base
+  point first and the corresponding overlay/source point second. Each remains
+  in its original layer coordinates; no correspondence is invented.
 - **Save regional overlay…** stores the current overlay matrix and visible ROI,
   which can be edited with reference pairs in the structured JSON dialog.
   Set `matrix` to `null` to fit the pairs, and use `fit_mode` similarity/affine.
@@ -585,3 +586,67 @@ Threshold bridges and apparent crossings remain unverified image topology;
 centerline extraction does not prove an electrical net, connection to another
 layer or TPI/Flash-controller function. Review smaller native-detail crops and
 record contacts separately when supported by evidence.
+
+### Click reference pairs and inspect contacts (v1.12.1)
+
+**Research evidence → Pick reference pairs…** opens independent base and overlay
+source views. A short click picks a point; dragging pans and the wheel zooms.
+Click the **base/target first**, then the corresponding **overlay/source** point.
+Each view reports its original-coordinate crop and sampling scale. Use **Choose
+source crop…** to navigate or reduce a large crop for native detail. Initial crop
+positions are navigation defaults, not inferred matches.
+
+Pairs appear numbered in both views and in a table. Add at least two distinct
+training pairs for a similarity transform or three non-collinear pairs for an
+affine transform. Mark additional pairs with **New pair is an independent check**,
+or change their table checkbox. Check points are excluded from fitting. **Calculate /
+check** reports per-point errors plus separate training/check summaries in base
+pixels. Removing a pair and repicking replaces a mistaken match. **Use base crop
+as validity ROI** explicitly selects where the fitted transform may be applied.
+
+Save records the name, original-coordinate pairs, check roles, model, ROI,
+residuals, status and review note in the existing reversible research history.
+Confirmed registration still requires a check pair and note. No residual is
+converted into a contact probability. **Edit / review…** reopens point-based
+registrations; **Advanced record JSON…** retains the numeric editing workflow.
+**Save regional overlay…** remains available for a manually adjusted matrix.
+
+**Contact / region… → contact** now uses the same two-view point picker instead
+of requiring you to type the peer coordinates. One explicitly clicked point is
+stored on each layer. Select a saved contact and press **Review contact…** (or
+**Edit / review…**) to load its two source detail images side by side.
+
+The review dialog lets you explicitly select a regional registration for those
+two layers. It shows training/check residual summaries and the geometric
+displacement between the two chosen contact points. An optional second regional
+registration can map a third layer into either contact layer's frame. That third
+view is labeled **predicted context only**, not a third observed contact. Wrong
+layer pairs, rejected alignments, out-of-ROI mappings and out-of-image context
+points are rejected. No region or reverse transform is silently chosen.
+
+Select 32–1024 crop pixels, then **Load / reload details**. Source views retain
+original coordinates and can be zoomed or panned independently; the observed
+points and predicted context are marked differently. Selecting different
+settings invalidates the loaded review until you reload. Save your candidate /
+confirmed / rejected decision and reason. This adds no electrical graph edge.
+The record retains the viewed crop rectangles, source-image PNG hashes, sampling
+scales, contact revision and registration IDs/revisions. Saving refuses a changed
+contact, changed registration or changed crop pixels; reload and inspect again.
+These hashes describe the exact returned source crops, not the entire SEM file.
+
+MCP exposes the same workflow:
+
+| Tool | Effect |
+| --- | --- |
+| `preview_reference_fit` | Unsaved similarity/affine fit and separate holdout residuals |
+| `get_contact_review` | JSON review metadata plus two or three source PNG detail images; read-only |
+| `review_contact` | Guarded, undoable decision using the exact loaded views |
+
+Call `get_contact_review` with `contact_id`, optional `alignment_id`, optional
+`context_alignment_id`, and `crop_size` (default 256). For `review_contact`, pass
+those same arguments, `expected_revision` from `contact_revision`, your `status`
+and `note`, plus `expected_image_hashes` mapping each returned view's `layer` to
+`image_sha256`, and `expected_registration_revisions` mapping each returned
+registration record's `id` to its `revision` (empty object when none is selected).
+A successful write is visible in the desktop dock after Refresh and can be undone
+through the existing GUI/MCP research history.

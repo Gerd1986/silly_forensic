@@ -35,8 +35,10 @@ class AnalysisDock(QDockWidget):
         callbacks = [('Refresh', self.refresh), ('Point', self.new_point),
                      ('Draw trace', self.start_trace), ('Contact / region…', self.new_geometry),
                      ('Extract centerlines', self.extract_centerlines),
+                     ('Pick reference pairs…', self.pick_registration), ('Review contact…', self.review_contact),
                      ('Save regional overlay…', self.new_alignment), ('Apply region', self.apply_selected),
                      ('Global overlay', self.global_overlay), ('Edit / review…', self.edit_selected),
+                     ('Advanced record JSON…', self.advanced_edit),
                      ('Delete record', self.delete_selected), ('Export JSON', self.export),
                      ('Undo research', lambda: self.undo(False)), ('Redo research', lambda: self.undo(True))]
         for i, (title, callback) in enumerate(callbacks):
@@ -180,18 +182,10 @@ class AnalysisDock(QDockWidget):
             return
         point = self.center(); geometry = [dict(layer=self.window.current_layer,points=[point])]
         if kind=='contact':
-            with self.window.db() as db:
-                layers=[n for n, in db.execute('SELECT name FROM layers') if n!=self.window.current_layer]
-            if not layers:
-                raise ValueError('A contact requires two layers')
-            peer,ok=QInputDialog.getItem(self,'Contact peer','Second layer:',layers,0,False)
-            if not ok:
-                return
-            # No invented cross-layer coordinate: explicit user entry is required.
-            text,ok=QInputDialog.getText(self,'Contact peer','Original X,Y on second layer (inspect it first):')
-            if not ok:
-                return
-            geometry.append(dict(layer=peer,points=[[float(v) for v in text.split(',')]]))
+            from pairing_ui import PairDialog
+            dialog=PairDialog(self.window,contact=True)
+            if dialog.exec()==dialog.DialogCode.Accepted:self.refresh()
+            return
         elif kind=='region':
             x,y,w,h=self.visible_roi();geometry[0]['points']=[[x,y],[x+w,y],[x+w,y+h],[x,y+h]]
             # Pixel-edge polygons may touch the image boundary; keep vertices on sampled pixels.
@@ -235,6 +229,18 @@ class AnalysisDock(QDockWidget):
             overlay_layer=self.window.overlay_layer,roi=self.visible_roi(),name='Local alignment',
             matrix=item_matrix(v.overlay),fit_mode='similarity',reference_points=[],status='candidate',note=''))
 
+    def pick_registration(self):
+        from pairing_ui import PairDialog
+        dialog=PairDialog(self.window)
+        if dialog.exec()==dialog.DialogCode.Accepted:self.refresh()
+
+    def review_contact(self):
+        from pairing_ui import ContactReviewDialog
+        record=self.selected()
+        if record.get('kind')!='contact':raise ValueError('Select a contact record first')
+        dialog=ContactReviewDialog(self.window,record)
+        if dialog.exec()==dialog.DialogCode.Accepted:self.refresh()
+
     def apply_selected(self):
         self.apply_region(self.selected())
 
@@ -276,6 +282,16 @@ class AnalysisDock(QDockWidget):
         self.active_region=saved;self.refresh()
 
     def edit_selected(self):
+        r=self.selected()
+        if r.get('kind')=='contact':self.review_contact();return
+        if r['type']=='alignment' and r.get('reference_points'):
+            from pairing_ui import PairDialog
+            dialog=PairDialog(self.window,existing=r)
+            if dialog.exec()==dialog.DialogCode.Accepted:self.refresh()
+            return
+        self.save_dialog(r,r)
+
+    def advanced_edit(self):
         r=self.selected();self.save_dialog(r,r)
 
     def delete_selected(self):

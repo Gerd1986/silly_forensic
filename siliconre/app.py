@@ -219,7 +219,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.12.0 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.12.1 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None

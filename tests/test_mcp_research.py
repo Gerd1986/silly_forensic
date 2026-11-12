@@ -72,6 +72,22 @@ class MCPResearchTests(unittest.TestCase):
                     self.assertGreater(len(preview['paths'][0]['points']),2)
                     extracted=await call('extract_trace_paths',dict(layer='M1',x=0,y=0,width=48,height=32,threshold=125))
                     self.assertEqual(len(extracted['records']),1)
+                    fit=await call('preview_reference_fit',dict(reference_points=region['reference_points']))
+                    self.assertEqual(fit['residual_summary']['checks']['count'],1)
+                    viewed=await session.call_tool('get_contact_review',dict(contact_id=point['id'],alignment_id=region['id'],crop_size=32))
+                    self.assertFalse(viewed.isError,str(viewed.content))
+                    self.assertEqual(len([v for v in viewed.content if v.type=='image']),2)
+                    plan=json.loads(viewed.content[0].text)
+                    hashes={v['layer']:v['image_sha256'] for v in plan['views']}
+                    revisions={r['record']['id']:r['record']['revision'] for r in plan['registrations']}
+                    review=dict(contact_id=point['id'],expected_revision=plan['contact_revision'],status='confirmed',
+                        note='Viewed native source contact crops',expected_image_hashes=hashes,
+                        expected_registration_revisions=revisions,alignment_id=region['id'],crop_size=32)
+                    reviewed=await call('review_contact',review)
+                    self.assertEqual(reviewed['provenance']['contact_review']['views'][0]['image_sha256'],hashes['M1'])
+                    await call('review_contact',review,error=True)
+                    history=await call('list_analysis_history',{})
+                    await call('undo_analysis_change',dict(expected_seq=history[0]['seq']))
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             image=np.zeros((32,48),np.uint8);image[14:18,4:40]=255

@@ -362,6 +362,55 @@ def preview_trace_paths(layer: str, x: int, y: int, width: int, height: int,
     return dict(layer=layer,**extract_paths(path,[x,y,width,height],threshold,min_area,invert))
 
 
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def get_contact_review(contact_id: str, alignment_id: str = '', context_alignment_id: str = '',
+                        crop_size: int = 256):
+    """View two native source-coordinate contact crops and optional third-layer context.
+    A regional alignment is explicitly selected, never inferred. Reports reference/check residuals,
+    source crop hashes and registration revisions. Third-layer points are predictions, not contacts.
+    Keep image hashes and registration revisions from this response for review_contact.
+    This is read-only and never confirms an electrical connection.
+    """
+    from contact_review import prepare_review
+    with visual_connect() as db:
+        plan,frames=prepare_review(db,PROJECT,contact_id,alignment_id,context_alignment_id,crop_size)
+    content=[TextContent(type='text',text=json.dumps(plan,allow_nan=False))]
+    for view,raw in zip(plan['views'],frames):
+        content.append(TextContent(type='text',text=view['layer']+' — '+view['role']))
+        content.append(ImageContent(type='image',mimeType='image/png',data=base64.b64encode(raw).decode('ascii')))
+    return content
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False,destructiveHint=False,idempotentHint=False))
+def review_contact(contact_id: str, expected_revision: int, status: str, note: str,
+                   expected_image_hashes: dict[str,str], expected_registration_revisions: dict[str,int],
+                   alignment_id: str = '', context_alignment_id: str = '', crop_size: int = 256) -> dict:
+    """WRITE an undoable contact-review decision using the crops returned by get_contact_review.
+    Pass layer->image_sha256 and registration-id->revision dictionaries from that view.
+    Refuses changed images, contact revisions or regional registrations; reload on conflict.
+    Stores exact source crop metadata and registration context with the review, not electrical edges.
+    Confirmed/rejected requires a review note. The original contact points are retained.
+    """
+    from contact_review import save_review
+    with connect() as db:
+        return save_review(db,PROJECT,contact_id,expected_revision,status,note,alignment_id,
+            context_alignment_id,crop_size,expected_image_hashes,expected_registration_revisions)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def preview_reference_fit(reference_points: list[dict], fit_mode: str = 'similarity') -> dict:
+    """Compute an unsaved overlay-source -> base-target fit; check:true pairs are held out.
+    Returns measured per-point residuals and summaries, never a confidence score or contact verdict.
+    Use save_regional_alignment to persist after inspecting the corresponding source images.
+    """
+    from contact_review import residual_summary
+    if len(reference_points)>1000:raise ValueError('At most 1000 reference pairs')
+    matrix=research.fit_references(reference_points,fit_mode)
+    residuals=[dict(check=bool(p.get('check',False)),error_px=float(np.linalg.norm(
+        (matrix@[*research._point(p['source']),1])[:2]-research._point(p['target'])))) for p in reference_points]
+    return dict(matrix=matrix.tolist(),residuals=residuals,residual_summary=residual_summary(dict(residuals=residuals)),saved=False)
+
+
 @server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
 def extract_trace_paths(layer: str, x: int, y: int, width: int, height: int,
                         threshold: int = 0, min_area: int = 20, invert: bool = False) -> dict:

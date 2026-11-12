@@ -166,6 +166,8 @@ def save_region(db, base_layer, overlay_layer, roi, name, reference_points=None,
     refs = reference_points or []
     if len(refs) > 1000:
         raise ValueError("At most 1000 reference pairs")
+    if any(not isinstance(p.get('check',False),bool) for p in refs):
+        raise ValueError('Reference check flags must be JSON booleans')
     refs = [dict(source=_point(p['source']), target=_point(p['target']), check=bool(p.get('check', False))) for p in refs]
     m = fit_references(refs, fit_mode) if matrix is None else _matrix(matrix)
     residuals = []
@@ -218,6 +220,11 @@ def save_evidence(db, kind, geometry, label="", status="candidate", note="",
     record = dict(type='evidence', kind=kind, geometry=clean, label=label, status=status, note=note,
                   references=refs,provenance=provenance)
     with _write(db):
+        if record_id:
+            old=get_record(db,record_id)
+            if old.get('geometry')!=clean or old.get('kind')!=kind:
+                record['provenance']=dict(provenance)
+                record['provenance'].pop('contact_review',None)
         snapshots = []
         for ident in refs:
             if ident == record_id:
