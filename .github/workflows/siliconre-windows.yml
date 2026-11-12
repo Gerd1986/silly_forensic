@@ -43,6 +43,10 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onedir --console --name SiliconRE-MCP --paths siliconre --collect-submodules mcp.server --collect-submodules mcp.shared --collect-data mcp --collect-submodules pydantic --collect-submodules pydantic_core siliconre/mcp_server.py
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller MCP build failed" }
           if (-not (Test-Path 'dist/SiliconRE-MCP/SiliconRE-MCP.exe')) { throw "MCP executable missing" }
+      - name: Smoke-test standalone MCP image tools
+        env:
+          SILICONRE_TEST_MCP_EXECUTABLE: ${{ github.workspace }}\dist\SiliconRE-MCP\SiliconRE-MCP.exe
+        run: python -m unittest discover -s tests -p test_mcp_images.py -v
       - name: Archive application
         shell: pwsh
         run: |

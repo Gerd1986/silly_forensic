@@ -22,9 +22,10 @@ from siliconre.layer_alignment import save_alignment
 class MCPImageTests(unittest.TestCase):
     def test_stdio_images_metadata_validation_and_read_only_project(self):
         async def exercise(folder):
+            executable = os.environ.get('SILICONRE_TEST_MCP_EXECUTABLE')
             params = StdioServerParameters(
-                command=sys.executable,
-                args=[str(Path(__file__).resolve().parents[1]/'siliconre'/'mcp_server.py')],
+                command=executable or sys.executable,
+                args=[] if executable else [str(Path(__file__).resolve().parents[1]/'siliconre'/'mcp_server.py')],
                 env={**os.environ, 'SILICONRE_PROJECT': str(folder)})
             async with stdio_client(params) as streams:
                 async with ClientSession(*streams) as session:
