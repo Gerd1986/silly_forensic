@@ -1,4 +1,5 @@
 """SiliconRE SEM delayering desktop viewer (prototype)."""
+from contextlib import closing, contextmanager
 import csv
 import json
 import sqlite3
@@ -177,8 +178,11 @@ class MainWindow(QMainWindow):
                 toolbar.addAction(action)
         self.statusBar().showMessage("Create or open a project to begin")
 
+    @contextmanager
     def db(self):
-        return sqlite3.connect(str(self.project / "project.sqlite3"))
+        with closing(sqlite3.connect(str(self.project / "project.sqlite3"))) as db:
+            with db:
+                yield db
 
     def clear_all_annotations(self):
         if not self.project:

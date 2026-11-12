@@ -16,6 +16,27 @@ class AnnotationUITests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_project_connections_close_and_commit_or_rollback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            window = MainWindow()
+            window.project = Path(folder)
+            try:
+                with window.db() as db:
+                    db.execute('CREATE TABLE example (value TEXT)')
+                    db.execute("INSERT INTO example VALUES ('saved')")
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    db.execute('SELECT 1')
+                with self.assertRaises(RuntimeError):
+                    with window.db() as failed:
+                        failed.execute("INSERT INTO example VALUES ('rolled back')")
+                        raise RuntimeError('abort')
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    failed.execute('SELECT 1')
+                with window.db() as verify:
+                    self.assertEqual(verify.execute('SELECT value FROM example').fetchall(), [('saved',)])
+            finally:
+                window.close()
+
     def test_cancel_backup_failure_and_clear_keep_view_and_overlay(self):
         with tempfile.TemporaryDirectory() as folder:
             window = MainWindow()

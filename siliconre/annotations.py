@@ -1,4 +1,5 @@
 """Project-wide annotation reset, retaining layer images and registration."""
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
@@ -19,7 +20,7 @@ def backup_annotations(db, project):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = folder / f"before_clear_{stamp}_{uuid4().hex[:8]}.sqlite3"
     try:
-        with sqlite3.connect(str(path)) as target:
+        with closing(sqlite3.connect(str(path))) as target:
             db.backup(target)
     except Exception:
         path.unlink(missing_ok=True)
