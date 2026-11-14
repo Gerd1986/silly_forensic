@@ -3,11 +3,11 @@ try:
 except ImportError:
     from roi_reader import read_gray_roi
 """Experimental via-like circular feature proposals from a bounded SEM ROI."""
-import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
 def detect_via_candidates(image_path, roi, min_radius=3, max_radius=30):
+    import cv2
     x, y, w, h = map(int, roi)
     if x < 0 or y < 0 or w <= 0 or h <= 0 or w*h > 12_000_000:
         raise ValueError("ROI must be within 12 megapixels")
@@ -41,3 +41,4 @@ def list_vias(db, layer, status=""):
         params.append(status)
     return [dict(zip(("id","layer","x","y","radius","status"), row))
             for row in db.execute(sql+" ORDER BY id", params)]
+
