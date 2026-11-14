@@ -21,6 +21,7 @@ from mos_detection import list_mos_candidates
 from debug_ports import analyze_debug_interfaces
 from logic_analysis import analyze_sequential
 import analysis_store as research
+import global_alignment_edit as global_edit
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -461,5 +462,112 @@ def redo_analysis_change(expected_seq: int) -> dict:
         return research.undo_redo(db, redo=True, expected_seq=expected_seq)
 
 
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def set_global_alignment(base_layer: str, overlay_layer: str, dx: float, dy: float,
+                         rotation_deg: float = 0, scale: float = 1,
+                         expected_matrix: list[list[float]] | None = None,
+                         note: str = "") -> dict:
+    """WRITE the global overlay->base similarity (clockwise degrees, original pixels).
+    First read get_layer_alignment and pass source_to_base as expected_matrix.
+    Omit expected_matrix only when no alignment exists. Refuses stale writes.
+    Creates a full SQLite backup and a separate undo history. Local registrations remain
+    independent and are never overwritten. Verify several distant crops after saving.
+    """
+    with visual_connect() as db:
+        layer_path(db,PROJECT,base_layer)
+        layer_path(db,PROJECT,overlay_layer)
+    return global_edit.write(PROJECT,base_layer,overlay_layer,dx,dy,rotation_deg,scale,
+                             expected_matrix,note)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def fit_global_alignment(base_layer: str, overlay_layer: str, reference_points: list[dict],
+                         expected_matrix: list[list[float]] | None = None,
+                         note: str = "") -> dict:
+    """WRITE a global similarity fitted from original-pixel reference pairs.
+    Pairs are {source:[overlay_x,overlay_y],target:[base_x,base_y],check:false}.
+    check:true pairs are held out and reported separately. At least two distinct
+    training pairs; spread them across the image. No affine warp of the global GUI view.
+    Pass expected_matrix from get_layer_alignment, or None when not yet aligned.
+    Stores reference pairs and residuals with a backed-up, undoable global edit.
+    """
+    if len(reference_points)>1000:
+        raise ValueError('At most 1000 reference pairs')
+    if any(not isinstance(p.get('check',False),bool) for p in reference_points):
+        raise ValueError('Reference check flags must be booleans')
+    with visual_connect() as db:
+        for p in reference_points:
+            _check_source_points(db,overlay_layer,[p['source']])
+            _check_source_points(db,base_layer,[p['target']])
+    fit=preview_reference_fit(reference_points,'similarity')
+    dx,dy,angle,scale=alignment_parameters(np.array(fit['matrix']))
+    edit=global_edit.write(PROJECT,base_layer,overlay_layer,dx,dy,angle,scale,
+                           expected_matrix,note,reference_points)
+    return {**fit,'saved':True,'edit':edit}
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def list_global_alignment_history(limit: int = 50) -> list[dict]:
+    """Read global edits, references, backups and undo state; separate from local research history."""
+    with visual_connect() as db:
+        return global_edit.history(db,limit)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False))
+def undo_global_alignment(expected_seq: int) -> dict:
+    """WRITE: undo the latest global alignment edit, with backup and stale-state checks.
+    Pass seq from list_global_alignment_history. Refuses a transform changed in the GUI.
+    Research evidence and local registrations are retained. Global redo is not provided;
+    a previous matrix can be explicitly saved again using set_global_alignment.
+    """
+    return global_edit.undo(PROJECT,expected_seq)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def propose_global_translation(base_layer: str, overlay_layer: str) -> dict:
+    """Estimate global translation from bounded previews without saving.
+    Requires similar orientation/scale; cross-material SEM contrast may give false peaks.
+    Inspect multiple locations before writing the proposed transform.
+    """
+    from registration import estimate_translation
+    with visual_connect() as db:
+        a,b=[layer_path(db,PROJECT,l) for l in (base_layer,overlay_layer)]
+    dx,dy,response=estimate_translation(str(a),str(b))
+    return dict(dx=dx,dy=dy,rotation_deg=0,scale=1,response=response,saved=False,verified=False)
+
+
+@server.tool(annotations=ToolAnnotations(readOnlyHint=True))
+def propose_local_translation(base_layer: str, overlay_layer: str, roi: list[float],
+                              alignment_id: str = "", max_side: int = 1024) -> dict:
+    """Estimate residual translation in a global or explicitly chosen regional alignment.
+    Returns a corrected matrix WITHOUT saving. Do not apply a local fit globally without
+    checking distant crops. Use save_regional_alignment for regional corrections.
+    Requires a textured fully covered crop. response is a heuristic, not probability.
+    """
+    import cv2
+    if len(roi)!=4:
+        raise ValueError('ROI is [x,y,width,height]')
+    x,y,w,h=roi
+    region_geometry(x,y,w,h,max_side)
+    with visual_connect() as db:
+        a,b=[layer_path(db,PROJECT,l) for l in (base_layer,overlay_layer)]
+        matrix=(research.region_matrix(db,alignment_id,base_layer,overlay_layer,roi)[0]
+                if alignment_id else load_alignment(db,base_layer,overlay_layer))
+    base,bm,_=render_region(a,roi,max_side)
+    overlay,om,_=render_region(b,roi,max_side,matrix)
+    if not (bm & om).all() or min(*base.shape)<32 or min(float(base.std()),float(overlay.std()))<1e-6:
+        raise ValueError('Choose a fully covered textured crop of at least 32 output pixels per side')
+    window=cv2.createHanningWindow((base.shape[1],base.shape[0]),cv2.CV_32F)
+    shift,response=cv2.phaseCorrelate(base.astype(np.float32),overlay.astype(np.float32),window)
+    delta=[-shift[0]*w/base.shape[1],-shift[1]*h/base.shape[0]]
+    if not np.isfinite([*delta,response]).all():
+        raise ValueError('No finite translation estimate')
+    proposed=matrix.copy()
+    proposed[:2,2]+=delta
+    return dict(matrix=proposed.tolist(),residual_translation_px=delta,response=float(response),
+                alignment_id=alignment_id,roi=roi,saved=False,verified=False)
+
+
 if __name__ == "__main__":
     server.run(transport="stdio")
+
