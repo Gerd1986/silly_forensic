@@ -20,6 +20,47 @@ from siliconre.layer_alignment import save_alignment
 
 
 class MCPImageTests(unittest.TestCase):
+    def test_stdio_writes_alignment_and_rollback(self):
+        async def exercise(folder):
+            executable=os.environ.get('SILICONRE_TEST_MCP_EXECUTABLE')
+            params=StdioServerParameters(command=executable or sys.executable,
+                args=[] if executable else [str(Path(__file__).resolve().parents[1]/'siliconre'/'mcp_server.py')],
+                env={**os.environ,'SILICONRE_PROJECT':str(folder)})
+            async with stdio_client(params) as streams:
+                async with ClientSession(*streams) as session:
+                    await session.initialize()
+                    names={t.name for t in (await session.list_tools()).tools}
+                    self.assertTrue({'edit_project_objects','align_from_control_points',
+                        'set_layer_alignment','propose_local_alignment','propose_image_alignment',
+                        'list_project_evidence','list_project_edits'}<=names)
+                    result=await session.call_tool('align_from_control_points',dict(
+                        base_layer='M1',overlay_layer='poly',base_points=[[10,15],[30,15],[10,35]],
+                        overlay_points=[[0,0],[20,0],[0,20]],save=True))
+                    self.assertFalse(result.isError,str(result.content))
+                    result=await session.call_tool('edit_project_objects',{'operations':[
+                        dict(action='marker',layer='M1',x=12,y=14,label='TPI candidate'),
+                        dict(action='evidence',kind='polyline',layer='M1',label='trace',
+                             data={'points':[[12,14],[20,14],[20,28]]})]})
+                    self.assertFalse(result.isError,str(result.content))
+                    result=await session.call_tool('list_project_evidence',{'layer':'M1'})
+                    self.assertFalse(result.isError,str(result.content))
+                    result=await session.call_tool('edit_project_objects',{'operations':[
+                        dict(action='marker',layer='M1',x=1,y=2,label='rolled back'),
+                        dict(action='marker',layer='missing',x=1,y=2)]})
+                    self.assertTrue(result.isError)
+        with tempfile.TemporaryDirectory() as root:
+            folder=Path(root)
+            Image.fromarray(np.zeros((64,64),dtype=np.uint8)).save(folder/'a.png')
+            with closing(sqlite3.connect(folder/'project.sqlite3')) as db:
+                db.execute('CREATE TABLE layers(name TEXT PRIMARY KEY,path TEXT)')
+                db.executemany('INSERT INTO layers VALUES(?,?)',[('M1','a.png'),('poly','a.png')])
+                db.commit()
+            asyncio.run(exercise(folder))
+            with closing(sqlite3.connect(folder/'project.sqlite3')) as db:
+                self.assertEqual(db.execute('SELECT label FROM markers').fetchall(),[('TPI candidate',)])
+                np.testing.assert_allclose(db.execute('SELECT dx,dy FROM alignments').fetchone(),(10,15),atol=1e-10)
+                self.assertEqual(db.execute('SELECT count(*) FROM mcp_edit_log').fetchone()[0],2)
+
     def test_stdio_images_metadata_validation_and_read_only_project(self):
         async def exercise(folder):
             executable = os.environ.get('SILICONRE_TEST_MCP_EXECUTABLE')
@@ -80,3 +121,4 @@ class MCPImageTests(unittest.TestCase):
             before = hashlib.sha256((folder/'project.sqlite3').read_bytes()).digest()
             asyncio.run(exercise(folder))
             self.assertEqual(hashlib.sha256((folder/'project.sqlite3').read_bytes()).digest(), before)
+
