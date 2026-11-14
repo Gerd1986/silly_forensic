@@ -2,6 +2,79 @@
 
 Windows-first SEM delayering reverse-engineering prototype.
 
+## MCP project editing and autonomous alignment
+
+The MCP server now exposes project writes directly. `SILICONRE_PROJECT` still
+selects one existing project. Restart the MCP server and reconnect the client
+after updating its executable so the new tool list is loaded. ChatGPT plugin
+approval settings are separate from the capabilities implemented by this server.
+
+`edit_project_objects(operations)` supports transactional batches (1–500 objects):
+
+| action | fields |
+| --- | --- |
+| marker | layer, x, y, label |
+| trace_candidate | layer, x, y, width, height, status |
+| via | layer, x, y, radius, status |
+| evidence | kind, layer, label, data, note, status |
+| trace_link | layer, source_id, target_id |
+| via_trace_link | via_id, trace_id |
+| via_layer_link | via_a, via_b |
+| mos_device | name, kind, layer, x, y, gate, drain, source, optional bulk/note |
+| logic_cell | name, kind, layer, pins, note |
+| alignment | base_layer, overlay_layer, dx, dy, rotation_deg, scale |
+| update | kind, id, fields |
+| delete | kind, id |
+
+Evidence kinds are `polyline` (actual ordered route points), `region` (closed
+block outline), `hypothesis` (structured JSON), and `alignment_points`. Polyline
+and region data use `{"points":[[x,y],...]}`. Routes are separate visual evidence;
+they do not automatically create electrical connectivity. Existing accepted
+trace/via objects and explicit link operations form the electrical hypothesis graph.
+`list_project_evidence` pages through saved evidence. The GUI renders routes and
+block outlines; use **Project → Refresh project evidence (F5)** to reload external
+edits and the saved alignment for the current overlay. Hypotheses and reference
+point sets are retrieved through MCP; they are not a new GUI editor.
+
+All coordinates use original image pixels, origin top left, X right and Y down.
+Creation returns object IDs in operation order; link them in a subsequent call.
+Review status is `candidate` (default), `accepted` or `rejected`. Acceptance means
+reviewed visual evidence, not electrically verified continuity. Removing or
+rejecting a trace/via clears dependent links; device/logic references must be
+removed first. Update supports marker coordinates/label, candidate/via geometry
+and status, evidence label/note/status/data, and device/logic notes. Change device
+terminals by deleting and recreating the device. IDs in audit records describe
+the database state at that edit; legacy object tables can reuse deleted IDs.
+
+Alignment tools:
+
+* `propose_image_alignment`: bounded global translation estimate; no save.
+* `align_from_control_points`: fit translation, clockwise rotation and uniform
+  scale from corresponding original pixel points. Returns per-point residuals,
+  RMS and maximum error. Two distinct pairs suffice mathematically; use at least
+  three well-spread pairs to check consistency. `save=True` stores the transform
+  and point evidence in one transaction.
+* `propose_local_alignment`: estimate a residual translation in an already aligned
+  crop. Returns a proposed global correction, without saving it. Compare distant
+  areas before accepting: a local improvement may degrade the global alignment.
+* `set_layer_alignment`: save a validated global similarity transform.
+* `compare_layer_region`: inspect aligned base/overlay/blend at multiple locations.
+
+Rotation and scaling happen around overlay (0,0), followed by translation.
+There is one global similarity transform per layer pair, not an elastic local
+warp. Different SEM materials may not correlate reliably. Residuals and correlation
+response are diagnostics, not proof that corresponding features were selected.
+
+Each successful edit batch reserves the SQLite writer, saves a consistent full
+database snapshot in `annotation_backups/`, then commits edits and an audit record
+together. Any operation failure rolls back the batch. `list_project_edits` returns
+the operations and backup paths. Backups are retained and can grow large; there
+is no automatic deletion. To recover, stop the GUI and MCP server and restore a
+chosen snapshot as `project.sqlite3` using SQLite-aware tooling (including any
+WAL/SHM handling). Source images are never changed. No arbitrary SQL, shell or
+unrestricted filesystem write tool is exposed. Existing read-only image tools
+continue to leave the database untouched.
+
 ## v0.1
 - PySide6 desktop viewer with mouse-wheel zoom, drag pan, and fit-to-view
 - Import SEM PNG/JPEG/TIFF images as named layers
@@ -419,3 +492,4 @@ does not save. Escape, choosing Pointer, changing layers, losing focus, or closi
 the window cancels an unfinished drag. A database save failure restores the
 previous overlay position. Wheel zoom also cancels an unfinished drag.
 Use **Manual overlay correction...** for rotation, scale and numeric offsets.
+
