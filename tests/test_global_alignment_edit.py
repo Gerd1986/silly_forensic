@@ -2,6 +2,7 @@ import sys
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import closing
 from pathlib import Path
 import numpy as np
@@ -71,6 +72,20 @@ class GlobalEditTests(unittest.TestCase):
         edits.undo(self.project,a['seq'])
         self.assertIsNone(self.matrix())
 
+    def test_backup_and_journal_failures_leave_transform_unchanged(self):
+        r=edits.write(self.project,'M1','poly',1,2)
+        with patch.object(edits,'backup_annotations',side_effect=PermissionError('backup denied')):
+            with self.assertRaises(PermissionError):
+                edits.write(self.project,'M1','poly',8,9,expected_matrix=r['matrix'])
+        np.testing.assert_allclose(self.matrix(),r['matrix'])
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("CREATE TRIGGER fail_history BEFORE INSERT ON global_alignment_history BEGIN SELECT RAISE(ABORT,'journal failed'); END")
+            db.commit()
+        with self.assertRaises(sqlite3.IntegrityError):
+            edits.write(self.project,'M1','poly',8,9,expected_matrix=r['matrix'])
+        np.testing.assert_allclose(self.matrix(),r['matrix'])
+
 
 if __name__=='__main__':
     unittest.main()
+
