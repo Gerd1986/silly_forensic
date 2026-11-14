@@ -2,6 +2,45 @@
 
 Windows-first SEM delayering reverse-engineering prototype.
 
+## MCP global alignment writes
+
+Alongside the shared research tools for points, actual trace paths, contacts,
+regions and local similarity/affine registrations, MCP can now write the GUI's
+global layer alignment directly:
+
+* `set_global_alignment(base_layer, overlay_layer, dx, dy, rotation_deg, scale,
+  expected_matrix, note)` saves an overlay-to-base similarity transform.
+  Rotation is clockwise in degrees around overlay (0,0); scale/rotation precede
+  translation. All coordinates use original image pixels.
+* `fit_global_alignment(base_layer, overlay_layer, reference_points,
+  expected_matrix, note)` fits and saves from original source/target reference
+  pairs. `check:true` pairs are held out and reported separately from training
+  residuals. The reference pairs are retained in the edit history.
+* `propose_global_translation` estimates translation from bounded previews.
+* `propose_local_translation` estimates residual translation in a bounded crop,
+  using the global alignment or an explicitly supplied regional `alignment_id`.
+  It returns a corrected matrix without saving. Use `save_regional_alignment`
+  for a correction that should apply only to that region.
+* `list_global_alignment_history` and `undo_global_alignment(expected_seq)` expose
+  a separate global edit history. Undo checks that the transform has not changed
+  in the GUI, and restores any prior direct/reverse entries.
+
+Before changing an existing global alignment, call `get_layer_alignment` and
+pass its `source_to_base` as `expected_matrix`. Omit it only for an unaligned pair.
+Stale writes fail. Each global write/undo reserves the SQLite writer and creates
+a consistent full database snapshot in `annotation_backups/` before committing.
+History and backups are retained; no global redo tool is provided. Reapply a
+previous matrix explicitly if needed. The independent research undo/redo history
+continues to handle evidence and regional registrations.
+
+This supports a self-directed workflow: inspect overview/detail crops, select
+reference pairs, fit a coarse global transform, check distant regions, refine
+individual regions, save actual trace paths and cross-layer contact evidence,
+then review the contact details. Image correlation across different SEM materials
+can fail: responses and residuals are diagnostics, not proof of connectivity.
+Source images remain unchanged. Updating the EXE requires restarting the MCP
+server and reconnecting the client to refresh its available tools.
+
 ## v0.1
 - PySide6 desktop viewer with mouse-wheel zoom, drag pan, and fit-to-view
 - Import SEM PNG/JPEG/TIFF images as named layers
@@ -650,3 +689,4 @@ and `note`, plus `expected_image_hashes` mapping each returned view's `layer` to
 registration record's `id` to its `revision` (empty object when none is selected).
 A successful write is visible in the desktop dock after Refresh and can be undone
 through the existing GUI/MCP research history.
+
