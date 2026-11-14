@@ -8,6 +8,7 @@ from uuid import uuid4
 
 # Children first; do not reset IDs, to avoid reusing externally referenced IDs.
 ANNOTATION_TABLES = (
+    "mcp_evidence",
     "logic_pins", "logic_cells", "mos_devices", "via_trace_links",
     "via_layer_links", "candidate_links", "mos_candidates",
     "via_candidates", "trace_candidates", "markers",
@@ -43,3 +44,4 @@ def clear_annotations(db):
         db.execute("RELEASE SAVEPOINT clear_all_annotations")
         raise
     return deleted
+
