@@ -88,6 +88,20 @@ class MCPResearchTests(unittest.TestCase):
                     await call('review_contact',review,error=True)
                     history=await call('list_analysis_history',{})
                     await call('undo_analysis_change',dict(expected_seq=history[0]['seq']))
+                    # Global writes use their own snapshot/undo lifecycle and stale-state guards.
+                    global_edit=await call('set_global_alignment',dict(base_layer='M1',overlay_layer='M2',dx=0,dy=0))
+                    await call('set_global_alignment',dict(base_layer='M1',overlay_layer='M2',dx=2,dy=3),error=True)
+                    fit=await call('fit_global_alignment',dict(base_layer='M1',overlay_layer='M2',
+                        expected_matrix=global_edit['matrix'],reference_points=[
+                            dict(source=[1,1],target=[3,4]),dict(source=[10,1],target=[12,4]),
+                            dict(source=[5,5],target=[7,8],check=True)]))
+                    self.assertTrue(fit['saved'])
+                    await call('undo_global_alignment',dict(expected_seq=fit['edit']['seq']))
+                    proposal=await call('propose_local_translation',dict(base_layer='M1',overlay_layer='M2',roi=[0,0,48,32]))
+                    self.assertFalse(proposal['saved'])
+                    proposal=await call('propose_global_translation',dict(base_layer='M1',overlay_layer='M2'))
+                    self.assertFalse(proposal['saved'])
+                    await call('undo_global_alignment',dict(expected_seq=global_edit['seq']))
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)
             image=np.zeros((32,48),np.uint8);image[14:18,4:40]=255
@@ -104,3 +118,4 @@ class MCPResearchTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
