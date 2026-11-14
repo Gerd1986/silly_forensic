@@ -1,5 +1,10 @@
 name: SiliconRE Windows build and release
 on:
+  pull_request:
+    paths:
+      - 'siliconre/**'
+      - 'tests/**'
+      - '.github/workflows/siliconre-windows.yml'
   workflow_dispatch:
     inputs:
       publish_release:
@@ -123,3 +128,4 @@ jobs:
           }
           gh release create "$env:TAG" SiliconRE-Windows-x64.zip SiliconRE-MCP-Windows-x64.zip --target "${{ github.sha }}" --title "SiliconRE $env:TAG" --notes-file release-notes.md --prerelease
           if ($LASTEXITCODE -ne 0) { throw "Release publication failed" }
+
