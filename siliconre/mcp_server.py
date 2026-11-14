@@ -20,6 +20,9 @@ from devices import resolve_devices, spice_netlist
 from mos_detection import list_mos_candidates
 from debug_ports import analyze_debug_interfaces
 from logic_analysis import analyze_sequential
+from project_edit import edit_project, fit_alignment
+from registration import estimate_translation
+import cv2
 
 server = FastMCP("SiliconRE")
 PROJECT = Path(os.environ.get("SILICONRE_PROJECT", ".")).resolve()
@@ -275,5 +278,139 @@ def plan_layer_scan(layer: str, tile_width: int = 4096, tile_height: int = 4096,
             "tiles": tiles, "next_index": next_index if next_index < total else None}
 
 
+@server.tool()
+def edit_project_objects(operations: list[dict]) -> dict:
+    """Atomically edit the active project, with pre-edit SQLite backup and audit log.
+    1..500 operations; all roll back on any error. Source images are never changed.
+    action=marker: layer,x,y,label.
+    action=trace_candidate: layer,x,y,width,height,status.
+    action=via: layer,x,y,radius,status.
+    action=evidence: kind(polyline/region/hypothesis/alignment_points),layer,label,note,
+      status,data. Polyline/region data={points:[[x,y],...]}; hypothesis data is JSON.
+      alignment_points data={overlay_layer,base_points:[[x,y],...],overlay_points:...}.
+    action=alignment: base_layer,overlay_layer,dx,dy,rotation_deg,scale.
+    action=trace_link: layer,source_id,target_id (accepted trace candidates).
+    action=via_trace_link: via_id,trace_id. action=via_layer_link: via_a,via_b.
+    action=mos_device: name,kind(nmos/pmos),layer,x,y,gate,drain,source,optional bulk,note.
+    action=logic_cell: name,kind(DFF/MUX2/AND2/OR2/XOR2/NOT/NAND2/NOR2),layer,pins,note.
+    action=update: kind(marker/trace_candidate/via/evidence/mos_device/logic_cell),id,fields.
+      Geometry and label/note/status can be updated where applicable; no layer moves.
+    action=delete: kind (same plus trace_link/via_trace_link/via_layer_link),id.
+    Coordinates use ORIGINAL layer pixels, not preview pixels. Status defaults candidate;
+    accepted is reviewed visual evidence, never proof of electrical continuity.
+    IDs from creations are returned in operation order; use a later call to link new IDs.
+    """
+    return edit_project(PROJECT, operations)
+
+
+@server.tool()
+def list_project_evidence(layer: str = "", kind: str = "", limit: int = 100,
+                          after_id: int = 0) -> list[dict]:
+    """Read MCP polylines, block regions, hypotheses and alignment point sets by stable ID.
+    Page by passing the final ID as after_id. No metadata is created by this read.
+    """
+    if not 1 <= limit <= 500 or after_id < 0:
+        raise ValueError("Invalid page")
+    with visual_connect() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='mcp_evidence'").fetchone():
+            return []
+        rows = db.execute("""SELECT id,kind,layer,label,data,note,status FROM mcp_evidence
+            WHERE id>? AND (?='' OR layer=?) AND (?='' OR kind=?) ORDER BY id LIMIT ?""",
+            (after_id,layer,layer,kind,kind,limit))
+        return [dict(id=i,kind=k,layer=l,label=label,data=json.loads(data),note=n,status=s)
+                for i,k,l,label,data,n,s in rows]
+
+
+@server.tool()
+def list_project_edits(after_id: int = 0, limit: int = 50) -> list[dict]:
+    """Read edit audit records and backup paths. Source files are never included."""
+    if not 1 <= limit <= 100 or after_id < 0:
+        raise ValueError("Invalid page")
+    with visual_connect() as db:
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='mcp_edit_log'").fetchone():
+            return []
+        return [dict(id=i,timestamp=t,operations=json.loads(o),backup=b) for i,t,o,b in
+                db.execute('SELECT id,timestamp,operations,backup FROM mcp_edit_log WHERE id>? ORDER BY id LIMIT ?',
+                           (after_id,limit))]
+
+
+@server.tool()
+def set_layer_alignment(base_layer: str, overlay_layer: str, dx: float, dy: float,
+                        rotation_deg: float = 0, scale: float = 1) -> dict:
+    """Save overlay -> base global similarity, backed up and audited.
+    Rotation clockwise in degrees; scale/rotation about (0,0), then translation.
+    Use compare_layer_region afterwards at multiple locations to validate the result.
+    """
+    return edit_project(PROJECT,[dict(action='alignment',base_layer=base_layer,
+        overlay_layer=overlay_layer,dx=dx,dy=dy,rotation_deg=rotation_deg,scale=scale)])
+
+
+@server.tool()
+def align_from_control_points(base_layer: str, overlay_layer: str,
+                              base_points: list[list[float]], overlay_points: list[list[float]],
+                              save: bool = False) -> dict:
+    """Fit global translation/rotation/uniform scale from corresponding ORIGINAL pixel points.
+    At least two distinct pairs; use >=3 well-spread pairs for meaningful residual checks.
+    Returns RMS and per-point residuals. save=True stores transform AND point evidence
+    atomically. Low fitting error alone does not establish correct feature correspondence.
+    """
+    with visual_connect() as db:
+        layer_path(db,PROJECT,base_layer)
+        layer_path(db,PROJECT,overlay_layer)
+    if base_layer == overlay_layer:
+        raise ValueError('Choose distinct layers')
+    fit = fit_alignment(base_points,overlay_points)
+    if save:
+        fit['edit'] = edit_project(PROJECT,[dict(action='alignment',base_layer=base_layer,
+            overlay_layer=overlay_layer,**{k:fit[k] for k in ('dx','dy','rotation_deg','scale')}),
+            dict(action='evidence',kind='alignment_points',layer=base_layer,label='Alignment control points',
+                 data=dict(overlay_layer=overlay_layer,base_points=base_points,overlay_points=overlay_points,
+                           rms_error_px=fit['rms_error_px']))])
+    return fit
+
+
+@server.tool()
+def propose_image_alignment(base_layer: str, overlay_layer: str) -> dict:
+    """Estimate global translation from bounded previews. Does NOT save.
+    Assumes similar contrast, orientation and scale. Cross-material SEM layers can
+    produce incorrect peaks; inspect several compare_layer_region crops before saving.
+    """
+    with visual_connect() as db:
+        a,b = [layer_path(db,PROJECT,l) for l in (base_layer,overlay_layer)]
+    dx,dy,response = estimate_translation(str(a),str(b))
+    return dict(base_layer=base_layer,overlay_layer=overlay_layer,dx=dx,dy=dy,
+                rotation_deg=0,scale=1,response=response,verified=False,saved=False)
+
+
+@server.tool()
+def propose_local_alignment(base_layer: str, overlay_layer: str, x: float,y: float,
+                            width: float,height: float,max_side: int = 1024) -> dict:
+    """Estimate residual translation inside an ALREADY aligned base-coordinate crop.
+    Does not save or silently replace a global alignment with a local correction.
+    Returns a proposed global transform; validate distant crops before set_layer_alignment.
+    Requires full coverage and textured images; response is a heuristic, not probability.
+    """
+    region_geometry(x,y,width,height,max_side)
+    with visual_connect() as db:
+        a,b = [layer_path(db,PROJECT,l) for l in (base_layer,overlay_layer)]
+        matrix = load_alignment(db,base_layer,overlay_layer)
+    base,bm,_ = render_region(a,(x,y,width,height),max_side)
+    overlay,om,_ = render_region(b,(x,y,width,height),max_side,matrix)
+    if not (bm & om).all() or min(*base.shape)<32:
+        raise ValueError('Choose a fully covered crop of at least 32 output pixels per side')
+    if min(float(base.std()),float(overlay.std()))<1e-6:
+        raise ValueError('Insufficient texture')
+    window = cv2.createHanningWindow((base.shape[1],base.shape[0]),cv2.CV_32F)
+    shift,response = cv2.phaseCorrelate(base.astype(np.float32),overlay.astype(np.float32),window)
+    delta = [-shift[0]*width/base.shape[1],-shift[1]*height/base.shape[0]]
+    if not np.isfinite([*delta,response]).all():
+        raise ValueError('No finite alignment estimate')
+    dx,dy,angle,scale = alignment_parameters(matrix)
+    return dict(base_layer=base_layer,overlay_layer=overlay_layer,
+                dx=dx+delta[0],dy=dy+delta[1],rotation_deg=angle,scale=scale,
+                residual_translation_px=delta,response=float(response),verified=False,saved=False)
+
+
 if __name__ == "__main__":
     server.run(transport="stdio")
+
