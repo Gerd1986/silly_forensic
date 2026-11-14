@@ -33,6 +33,7 @@ from logic_analysis import KINDS, PINS, add_logic_cell, resolved_cells, analyze_
 from batch_import import images_in_folder
 from stitching import stitch_images
 from tile_grid import stitch_tile_grid, plan_tile_grid, parse_tile
+from analysis_ui import AnalysisDock
 
 def mouse_tool_icon(kind):
     """Native vector icons, independent of theme or external icon files."""
@@ -74,6 +75,7 @@ class Viewer(QGraphicsView):
         self.overlay = None
         self.mouse_mode = "pointer"
         self._overlay_drag = None
+        self._overlay_clip = None
         self._update_mouse_cursor()
 
     @property
@@ -87,14 +89,16 @@ class Viewer(QGraphicsView):
     def _update_mouse_cursor(self):
         cursor = (Qt.CursorShape.ClosedHandCursor if self._overlay_drag else
                   Qt.CursorShape.OpenHandCursor if self.mouse_mode == "overlay" else
-                  Qt.CursorShape.CrossCursor if self.mouse_mode == "mark" else
+                  Qt.CursorShape.CrossCursor if self.mouse_mode in ("mark", "trace") else
                   Qt.CursorShape.ArrowCursor)
         self.viewport().setCursor(cursor)
 
     def set_mouse_mode(self, mode):
-        if mode not in ("pointer", "mark", "overlay"):
+        if mode not in ("pointer", "mark", "overlay", "trace"):
             raise ValueError("Unknown mouse mode")
         self.cancel_overlay_drag()
+        if hasattr(self.window, 'research') and self.mouse_mode == 'trace' and mode != 'trace':
+            self.window.research.cancel_trace()
         self.mouse_mode = mode
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag if mode == "pointer"
                          else QGraphicsView.DragMode.NoDrag)
@@ -120,6 +124,9 @@ class Viewer(QGraphicsView):
         self.pix = TiledImage(path)
         self.scene_.addItem(self.pix)
         self.overlay = None
+        self._overlay_clip = None
+        if hasattr(self.window, 'research'):
+            self.window.research.active_region = None
         self.scene_.setSceneRect(self.pix.boundingRect())
         self.fitInView(self.scene_.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
@@ -128,6 +135,9 @@ class Viewer(QGraphicsView):
         if self.overlay:
             self.scene_.removeItem(self.overlay)
             self.overlay.close()
+        if self._overlay_clip is not None:
+            self.scene_.removeItem(self._overlay_clip)
+            self._overlay_clip = None
         self.overlay = TiledImage(path)
         self.overlay.setZValue(1)
         self.overlay.setPos(dx, dy)
@@ -157,7 +167,23 @@ class Viewer(QGraphicsView):
                     self.window.add_marker(p.x(), p.y())
                 event.accept()
                 return
+            if self.mouse_mode == 'trace':
+                if self.pix and self.pix.boundingRect().contains(p):
+                    self.window.research.add_trace_point(p.x(), p.y())
+                event.accept()
+                return
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Return and self.mouse_mode == 'trace':
+            self.window.research.run(self.window.research.finish_trace)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape:
+            self.set_mouse_mode('pointer')
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self._overlay_drag:
@@ -193,7 +219,7 @@ class Viewer(QGraphicsView):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SiliconRE 1.11.2 - SEM Delayering")
+        self.setWindowTitle("SiliconRE 1.12.1 - SEM Delayering")
         self.resize(1300, 850)
         self.project = None
         self.current_layer = None
@@ -212,6 +238,7 @@ class MainWindow(QMainWindow):
         opacity_dock = QDockWidget("Overlay opacity", self)
         opacity_dock.setWidget(self.opacity)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, opacity_dock)
+        self.research = AnalysisDock(self)
         actions = [
             ("New project", self.new_project),
             ("Open project", self.open_project),
@@ -224,7 +251,8 @@ class MainWindow(QMainWindow):
             ("Manual overlay correction...", self.align_overlay),
             ("Auto-align overlay", self.auto_align_overlay),
             ("Build TIFF pyramid", self.create_pyramid),
-            ("Detect trace candidates", self.detect_candidates),
+            ("Detect trace paths", lambda: self.research.run(self.research.extract_centerlines)),
+            ("Legacy rectangle candidates", self.detect_candidates),
             ("Accept selected", lambda: self.review_selected("accepted")),
             ("Reject selected", lambda: self.review_selected("rejected")),
             ("Delete selected", self.delete_selected),
@@ -250,6 +278,7 @@ class MainWindow(QMainWindow):
             ("Analyze debug port clues", self.analyze_ports),
             ("Annotate logic cell", self.annotate_logic),
             ("Analyze sequential logic", self.analyze_logic),
+            ("Research evidence", lambda: self.research.show()),
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]
         groups = {
@@ -257,13 +286,13 @@ class MainWindow(QMainWindow):
             "Layers": {"Stitch selected SEM images", "Stitch SEM image folder", "Overlay layer",
                        "Manual overlay correction...", "Move overlay", "Auto-align overlay", "Build TIFF pyramid"},
             "Annotations": {"Mark point", "Clear all annotations..."},
-            "Traces": {"Detect trace candidates", "Accept selected", "Reject selected",
+            "Traces": {"Detect trace paths", "Legacy rectangle candidates", "Accept selected", "Reject selected",
                        "Delete selected", "Resize selected", "Connect selected", "Remove selected links"},
             "Vias": {"Detect via candidates", "Review nearest via", "Associate via to trace",
                      "Connect vias across layers", "Suggest aligned via pairs"},
             "Devices": {"Add MOS transistor", "Delete MOS transistor", "Detect MOS candidates",
                         "Review MOS candidate", "Annotate logic cell"},
-            "Analysis": {"Analyze debug port clues", "Analyze sequential logic"},
+            "Analysis": {"Analyze debug port clues", "Analyze sequential logic", "Research evidence"},
             "Export": {"Export candidates CSV", "Export manual nets JSON", "Export vias JSON",
                        "Export reconstructed nets", "Export transistor netlist", "Export MOS candidates JSON"},
             "View": {"Pointer / neutral", "Fit"},
@@ -317,8 +346,10 @@ class MainWindow(QMainWindow):
             self, "Clear all annotations",
             "Delete ALL annotations on ALL layers?\n\n"
             "This removes markers, trace/via/MOS candidates (including accepted and rejected), "
-            "manual links, transistor annotations and logic cells.\n"
-            "Images, layers and alignments are kept. A database backup is created first.",
+            "manual links, transistor annotations, logic cells and research evidence.\n"
+            "Images, layers and global/regional alignments are kept.\n"
+            "A database backup is created first; restore clear-all from that backup.\n"
+            "Research undo/redo history is disabled across clear-all.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel)
         if answer != QMessageBox.StandardButton.Yes:
@@ -335,6 +366,7 @@ class MainWindow(QMainWindow):
                     "marker", "manual_link", "via_candidate", "mos_candidate"}:
                 self.viewer.scene_.removeItem(item)
         self.viewer.mark_mode = False
+        self.research.refresh()
         self.statusBar().showMessage(
             f"Cleared {sum(deleted.values())} annotation records across all layers; backup: {backup}")
 
@@ -512,6 +544,7 @@ class MainWindow(QMainWindow):
             self.show_vias()
             self.show_mos_candidates()
             self.statusBar().showMessage(name + " - " + row[0])
+            self.research.refresh()
         except Exception as exc:
             QMessageBox.warning(self, "Image error", str(exc))
 
@@ -537,8 +570,12 @@ class MainWindow(QMainWindow):
         dx, dy, angle, scale = parameters
         self.viewer.show_overlay(path, dx, dy, self.opacity.value()/100, angle, scale)
         self.overlay_layer = name
+        self.research.active_region = None
 
     def align_overlay(self):
+        if self.research.active_region:
+            QMessageBox.information(self, "Regional overlay active", "Use Edit / review in Research evidence, or switch to Global overlay first")
+            return
         if not self.overlay_layer or not self.viewer.overlay:
             QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
             return
@@ -601,6 +638,9 @@ class MainWindow(QMainWindow):
                 overlay.setScale(original[3])
 
     def auto_align_overlay(self):
+        if self.research.active_region:
+            QMessageBox.information(self, "Regional overlay active", "Switch to Global overlay before automatic alignment")
+            return
         if not self.current_layer or not self.overlay_layer:
             QMessageBox.information(self, "Select overlay", "Select an overlay layer first")
             return
@@ -1246,8 +1286,11 @@ class MainWindow(QMainWindow):
             if not self.project or not self.current_layer or not self.overlay_layer or item is not self.viewer.overlay:
                 raise ValueError("No active overlay layer pair")
             with self.db() as db:
-                save_alignment(db, self.current_layer, self.overlay_layer,
-                               item.pos().x(), item.pos().y(), item.rotation(), item.scale())
+                if not self.research.active_region:
+                    save_alignment(db, self.current_layer, self.overlay_layer,
+                                   item.pos().x(), item.pos().y(), item.rotation(), item.scale())
+            if self.research.active_region:
+                self.research.save_drag(item)
         except (sqlite3.Error, ValueError) as exc:
             item.setPos(start)
             QMessageBox.warning(self, "Overlay position not saved", str(exc))

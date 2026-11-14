@@ -2,6 +2,45 @@
 
 Windows-first SEM delayering reverse-engineering prototype.
 
+## MCP global alignment writes
+
+Alongside the shared research tools for points, actual trace paths, contacts,
+regions and local similarity/affine registrations, MCP can now write the GUI's
+global layer alignment directly:
+
+* `set_global_alignment(base_layer, overlay_layer, dx, dy, rotation_deg, scale,
+  expected_matrix, note)` saves an overlay-to-base similarity transform.
+  Rotation is clockwise in degrees around overlay (0,0); scale/rotation precede
+  translation. All coordinates use original image pixels.
+* `fit_global_alignment(base_layer, overlay_layer, reference_points,
+  expected_matrix, note)` fits and saves from original source/target reference
+  pairs. `check:true` pairs are held out and reported separately from training
+  residuals. The reference pairs are retained in the edit history.
+* `propose_global_translation` estimates translation from bounded previews.
+* `propose_local_translation` estimates residual translation in a bounded crop,
+  using the global alignment or an explicitly supplied regional `alignment_id`.
+  It returns a corrected matrix without saving. Use `save_regional_alignment`
+  for a correction that should apply only to that region.
+* `list_global_alignment_history` and `undo_global_alignment(expected_seq)` expose
+  a separate global edit history. Undo checks that the transform has not changed
+  in the GUI, and restores any prior direct/reverse entries.
+
+Before changing an existing global alignment, call `get_layer_alignment` and
+pass its `source_to_base` as `expected_matrix`. Omit it only for an unaligned pair.
+Stale writes fail. Each global write/undo reserves the SQLite writer and creates
+a consistent full database snapshot in `annotation_backups/` before committing.
+History and backups are retained; no global redo tool is provided. Reapply a
+previous matrix explicitly if needed. The independent research undo/redo history
+continues to handle evidence and regional registrations.
+
+This supports a self-directed workflow: inspect overview/detail crops, select
+reference pairs, fit a coarse global transform, check distant regions, refine
+individual regions, save actual trace paths and cross-layer contact evidence,
+then review the contact details. Image correlation across different SEM materials
+can fail: responses and residuals are diagnostics, not proof of connectivity.
+Source images remain unchanged. Updating the EXE requires restarting the MCP
+server and reconnecting the client to refresh its available tools.
+
 ## v0.1
 - PySide6 desktop viewer with mouse-wheel zoom, drag pan, and fit-to-view
 - Import SEM PNG/JPEG/TIFF images as named layers
@@ -419,3 +458,235 @@ does not save. Escape, choosing Pointer, changing layers, losing focus, or closi
 the window cancels an unfinished drag. A database save failure restores the
 previous overlay position. Wheel zoom also cancels an unfinished drag.
 Use **Manual overlay correction...** for rotation, scale and numeric offsets.
+
+## Regional registrations and MCP write access (v1.12.0)
+
+The MCP server can now **write research records into the active project**:
+regional overlay registrations, reference-point pairs, source-coordinate points,
+trace polylines, contact hypotheses, regions, labels and review notes. The GUI
+and MCP share these records in `project.sqlite3`. Original SEM images are never
+rewritten. Use an existing project selected by `SILICONRE_PROJECT` as before.
+Restart the updated MCP server and refresh the client's tool list/permissions.
+Grant its new write tools in your MCP client if requested; the server itself
+needs filesystem write permission to that project directory. There is no new
+network listener or remote arbitrary-file write tool.
+
+### MCP tools
+
+| Tool | Effect |
+| --- | --- |
+| `list_analysis_records` | Read regional alignments/evidence, optionally filter by type, layer and status |
+| `save_regional_alignment` | Create/update a regional overlay-to-base transform and reference pairs |
+| `save_analysis_evidence` | Create/update point, trace, contact, region or note records |
+| `delete_analysis_record` | Reversibly delete one unreferenced research record |
+| `list_analysis_history` | Read persistent history, including actor, time and undo/redo state |
+| `undo_analysis_change` / `redo_analysis_change` | Reverse/reapply a research change, guarded by history sequence |
+
+A saved regional transform has its own ID and base-coordinate rectangle
+`[x,y,width,height]`. It **does not replace the global layer-pair alignment**.
+Pass its ID as `alignment_id` to `compare_layer_region`. The image comparison
+rejects rectangles outside that ROI, rejected alignments and different layer
+pairs. Regional transforms are selected explicitly; overlapping regions never
+silently choose one another. Reverse-pair regional use requires a separately
+specified region; it is not guessed. Without `alignment_id`, comparison retains
+its existing global-alignment behavior.
+
+Example `save_regional_alignment` arguments (adapt coordinates to your images):
+
+```json
+{
+  "base_layer": "M1",
+  "overlay_layer": "poly",
+  "roi": [1000, 1000, 800, 600],
+  "name": "Flash edge - contact check",
+  "fit_mode": "similarity",
+  "reference_points": [
+    {"source": [1010, 1015], "target": [1000, 1000]},
+    {"source": [1710, 1015], "target": [1700, 1000]},
+    {"source": [1310, 1415], "target": [1300, 1400], "check": true}
+  ],
+  "note": "Two fitting landmarks; a third point held out for inspection"
+}
+```
+
+Reference `source` coordinates belong to the overlay; `target` belongs to the
+base. Similarity fitting needs two distinct training pairs; affine fitting needs
+three non-collinear training pairs. `check:true` points are **not fitted**.
+Residuals are reported per pair in base pixels, with the check/training flag.
+They are measurements, not confidence scores or proof of via identity. To store
+a manual transform, supply a finite orientation-preserving affine `matrix`
+(3x3, overlay to base) instead. It must have singular scales in 0.01..100.
+A `confirmed` regional registration requires an independent check pair and a
+review note; the user still decides whether its measured errors are acceptable.
+
+Example `save_analysis_evidence` arguments:
+
+```json
+{
+  "kind": "contact",
+  "label": "N2 possible M3/M2 transition",
+  "geometry": [
+    {"layer": "M3", "points": [[975, 537]]},
+    {"layer": "M2", "points": [[876, 659]]}
+  ],
+  "status": "candidate",
+  "note": "Illustrative coordinates only; inspect your actual source layers"
+}
+```
+
+Contact records require exactly one original-image point on each of two distinct
+layers. A trace has at least two vertices in its source layer. Each point remains
+in its original source frame; saving or applying an alignment never moves it.
+Optional `references` contains existing research record IDs, for example the
+regional registration used during review. Evidence also retains a snapshot of
+the referenced record and revision, so later alignment edits cannot rewrite the
+registration context of an earlier observation. All writes validate layer names and
+image bounds. Default status is `candidate`; `confirmed` and `rejected` require
+a review note. **Confirmed is an explicit review claim; research evidence never
+adds an electrical graph edge or identifies a TPI/Flash-controller function.**
+Use the existing electrical connection workflow separately when justified.
+
+### Desktop workflow
+
+Open **Analysis → Research evidence**. The dock lists both GUI- and MCP-created
+records for the current layer. Press **Refresh** after MCP edits; records are
+not polled automatically. Orange dashed records are candidates, green records
+are confirmed and red dashed records are rejected; tooltips show IDs and notes.
+
+- **Point** starts from the current viewport center; edit its source coordinates
+  and label in the dialog.
+- **Draw trace** lets you click source-image vertices. Enter opens the save/review
+  dialog, Escape cancels. Pointer mode remains available throughout.
+- **Contact / region…** creates a two-layer contact, a visible-area polygon or a
+  coordinate-anchored note. Contacts now open two source views: click the base
+  point first and the corresponding overlay/source point second. Each remains
+  in its original layer coordinates; no correspondence is invented.
+- **Save regional overlay…** stores the current overlay matrix and visible ROI,
+  which can be edited with reference pairs in the structured JSON dialog.
+  Set `matrix` to `null` to fit the pairs, and use `fit_mode` similarity/affine.
+- Select the saved region and press **Apply region**. The overlay is clipped to
+  its ROI. Global manual/automatic alignment is blocked while that regional
+  overlay is active. The hand tool updates only the selected regional record,
+  preserves its affine terms and resets review status to candidate.
+- **Global overlay** returns to the existing global pair transform. **Edit /
+  review…** edits coordinates, reference pairs, status and notes. **Export JSON**
+  exports all current research records plus up to 200 history summaries.
+
+### Persistence, undo and compatibility
+
+Every research create/update/delete is an atomic SQLite savepoint with before
+and after payloads in persistent project history. Updates/deletions require the
+record's current `expected_revision`; undo/restoration uses monotonic revisions,
+so an old MCP edit cannot overwrite a subsequently restored version. MCP undo
+and redo require the relevant `expected_seq` from `list_analysis_history`.
+The history is project-wide across GUI and MCP sessions; a new write after undo
+abandons the old redo branch. Layer switches/restarts retain records and history.
+
+Undo/redo applies to these new research operations, not older trace/via/global
+alignment editing. **Clear all annotations** also clears research evidence,
+retains global/regional registrations and creates the existing database backup.
+Clear-all disables old research undo/redo branches; restore that operation from
+its full backup rather than resurrecting dangling evidence references.
+
+Old projects need no conversion before read-only image/research queries. The
+new research tables are created on the first research write. Read-only queries
+still do not create/migrate tables. No raw project images or case data are
+included in this repository. Existing GUI drawing, electrical net reconstruction
+and global alignment APIs retain their original coordinate conventions.
+
+### Native-pixel tracing instead of rectangle-only detection
+
+The default **Traces → Detect trace paths** command now extracts actual ordered
+centerline vertices in the visible source-image ROI, rather than treating a
+bounding rectangle as a wire. **Research evidence → Extract centerlines** does
+the same. Existing rectangle candidates remain available as the explicitly named
+legacy tool and are preserved in old projects.
+
+MCP has two corresponding tools:
+
+- `preview_trace_paths`: read-only native-pixel segmentation and centerline graph.
+- `extract_trace_paths`: write the extracted polylines into the shared research
+  records, always as candidates. The entire extraction save is atomic.
+
+Both take `layer`, integer `x`, `y`, `width`, `height`, `threshold` (0=Otsu),
+`min_area` and `invert`. The ROI is limited to 2 million native pixels. Threshold
+segmentation removes only small components; it does not close gaps or join nearby
+lines. Zhang-Suen thinning preserves a pixel skeleton. Each graph edge is visited
+once; maximal paths split at junctions, and closed loops remain closed. Native
+pixel centers are stored as source coordinates; there is no contour-to-box or
+centroid-to-centroid shortcut. Dense or unconverged extraction is rejected with
+a request to reduce the ROI, rather than returning truncated traces.
+
+Saved provenance includes the ROI, threshold, method, length, component, branch/
+endpoint type and whether the component touches the ROI border. Such border
+contact means a displayed end must not be treated as a physical wire endpoint.
+The GUI draws the polylines and their ends, including junction indications.
+Threshold bridges and apparent crossings remain unverified image topology;
+centerline extraction does not prove an electrical net, connection to another
+layer or TPI/Flash-controller function. Review smaller native-detail crops and
+record contacts separately when supported by evidence.
+
+### Click reference pairs and inspect contacts (v1.12.1)
+
+**Research evidence → Pick reference pairs…** opens independent base and overlay
+source views. A short click picks a point; dragging pans and the wheel zooms.
+Click the **base/target first**, then the corresponding **overlay/source** point.
+Each view reports its original-coordinate crop and sampling scale. Use **Choose
+source crop…** to navigate or reduce a large crop for native detail. Initial crop
+positions are navigation defaults, not inferred matches.
+
+Pairs appear numbered in both views and in a table. Add at least two distinct
+training pairs for a similarity transform or three non-collinear pairs for an
+affine transform. Mark additional pairs with **New pair is an independent check**,
+or change their table checkbox. Check points are excluded from fitting. **Calculate /
+check** reports per-point errors plus separate training/check summaries in base
+pixels. Removing a pair and repicking replaces a mistaken match. **Use base crop
+as validity ROI** explicitly selects where the fitted transform may be applied.
+
+Save records the name, original-coordinate pairs, check roles, model, ROI,
+residuals, status and review note in the existing reversible research history.
+Confirmed registration still requires a check pair and note. No residual is
+converted into a contact probability. **Edit / review…** reopens point-based
+registrations; **Advanced record JSON…** retains the numeric editing workflow.
+**Save regional overlay…** remains available for a manually adjusted matrix.
+
+**Contact / region… → contact** now uses the same two-view point picker instead
+of requiring you to type the peer coordinates. One explicitly clicked point is
+stored on each layer. Select a saved contact and press **Review contact…** (or
+**Edit / review…**) to load its two source detail images side by side.
+
+The review dialog lets you explicitly select a regional registration for those
+two layers. It shows training/check residual summaries and the geometric
+displacement between the two chosen contact points. An optional second regional
+registration can map a third layer into either contact layer's frame. That third
+view is labeled **predicted context only**, not a third observed contact. Wrong
+layer pairs, rejected alignments, out-of-ROI mappings and out-of-image context
+points are rejected. No region or reverse transform is silently chosen.
+
+Select 32–1024 crop pixels, then **Load / reload details**. Source views retain
+original coordinates and can be zoomed or panned independently; the observed
+points and predicted context are marked differently. Selecting different
+settings invalidates the loaded review until you reload. Save your candidate /
+confirmed / rejected decision and reason. This adds no electrical graph edge.
+The record retains the viewed crop rectangles, source-image PNG hashes, sampling
+scales, contact revision and registration IDs/revisions. Saving refuses a changed
+contact, changed registration or changed crop pixels; reload and inspect again.
+These hashes describe the exact returned source crops, not the entire SEM file.
+
+MCP exposes the same workflow:
+
+| Tool | Effect |
+| --- | --- |
+| `preview_reference_fit` | Unsaved similarity/affine fit and separate holdout residuals |
+| `get_contact_review` | JSON review metadata plus two or three source PNG detail images; read-only |
+| `review_contact` | Guarded, undoable decision using the exact loaded views |
+
+Call `get_contact_review` with `contact_id`, optional `alignment_id`, optional
+`context_alignment_id`, and `crop_size` (default 256). For `review_contact`, pass
+those same arguments, `expected_revision` from `contact_revision`, your `status`
+and `note`, plus `expected_image_hashes` mapping each returned view's `layer` to
+`image_sha256`, and `expected_registration_revisions` mapping each returned
+registration record's `id` to its `revision` (empty object when none is selected).
+A successful write is visible in the desktop dock after Refresh and can be undone
+through the existing GUI/MCP research history.
+

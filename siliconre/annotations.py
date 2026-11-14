@@ -37,6 +37,14 @@ def clear_annotations(db):
         for table in ANNOTATION_TABLES:
             if table in tables:
                 deleted[table] = db.execute(f'DELETE FROM "{table}"').rowcount
+        if 'analysis_records' in tables:
+            deleted['research_evidence'] = db.execute(
+                "DELETE FROM analysis_records WHERE type='evidence'").rowcount
+            # Clear-all is restored through its full database backup, like legacy
+            # annotations. It is a history barrier: do not resurrect cleared data
+            # or references to it through an older research undo/redo branch.
+            if 'analysis_history' in tables:
+                db.execute('UPDATE analysis_history SET active=0')
         db.execute("RELEASE SAVEPOINT clear_all_annotations")
     except Exception:
         db.execute("ROLLBACK TO SAVEPOINT clear_all_annotations")
