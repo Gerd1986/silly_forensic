@@ -19,6 +19,32 @@ class ManualAlignmentUITests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_refresh_loads_mcp_route_and_saved_overlay(self):
+        from project_edit import edit_project
+        with tempfile.TemporaryDirectory() as root:
+            folder=Path(root)
+            path=folder/'image.tif'
+            tifffile.imwrite(path,np.zeros((64,80),dtype=np.uint8))
+            window=MainWindow()
+            window.project=folder
+            try:
+                with window.db() as db:
+                    db.execute('CREATE TABLE layers(name TEXT PRIMARY KEY,path TEXT)')
+                    db.executemany('INSERT INTO layers VALUES(?,?)',[('M1',str(path)),('poly',str(path))])
+                edit_project(folder,[dict(action='marker',layer='M1',x=5,y=6,label='pad'),
+                    dict(action='evidence',kind='polyline',layer='M1',label='TPI route',
+                         data={'points':[[5,6],[10,6],[10,20]]}),
+                    dict(action='alignment',base_layer='M1',overlay_layer='poly',dx=3,dy=4)])
+                window.current_layer='M1'
+                window.overlay_layer='poly'
+                window.refresh_project_evidence()
+                self.assertEqual(window.overlay_layer,'poly')
+                self.assertTrue(any(i.toolTip().startswith('TPI route') for i in window.viewer.scene_.items()))
+                self.assertEqual(window.viewer.overlay.pos(),QPointF(3,4))
+                self.assertEqual(window.actions_by_title['Refresh project evidence'].shortcut().toString(),'F5')
+            finally:
+                window.close()
+
     def test_live_preview_cancel_save_reload_and_autoalign_guard(self):
         with tempfile.TemporaryDirectory() as root:
             folder=Path(root)
@@ -71,3 +97,4 @@ class ManualAlignmentUITests(unittest.TestCase):
                 if window.viewer.overlay:
                     window.viewer.overlay.close()
                 window.close()
+
