@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QPointF, QEventLoop
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPolygonF, QPixmap, QPen, QColor
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPainterPath, QPolygonF, QPixmap, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsScene,
     QGraphicsView, QFileDialog, QInputDialog, QMainWindow, QMessageBox,
@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
         actions = [
             ("New project", self.new_project),
             ("Open project", self.open_project),
+            ("Refresh project evidence", self.refresh_project_evidence),
             ("Stitch selected SEM images", self.import_images),
             ("Stitch SEM image folder", self.import_folder),
             ("Pointer / neutral", self.pointer_mode),
@@ -253,7 +254,7 @@ class MainWindow(QMainWindow):
             ("Fit", lambda: self.viewer.fitInView(self.viewer.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)),
         ]
         groups = {
-            "Project": {"New project", "Open project"},
+            "Project": {"New project", "Open project", "Refresh project evidence"},
             "Layers": {"Stitch selected SEM images", "Stitch SEM image folder", "Overlay layer",
                        "Manual overlay correction...", "Move overlay", "Auto-align overlay", "Build TIFF pyramid"},
             "Annotations": {"Mark point", "Clear all annotations..."},
@@ -279,6 +280,8 @@ class MainWindow(QMainWindow):
         for title, callback in actions:
             action = QAction(title, self)
             action.triggered.connect(callback)
+            if title == "Refresh project evidence":
+                action.setShortcut("F5")
             self.actions_by_title[title] = action
             mouse_mode = {"Pointer / neutral": "pointer", "Mark point": "mark",
                           "Move overlay": "overlay"}.get(title)
@@ -490,6 +493,21 @@ class MainWindow(QMainWindow):
         except (ValueError,OSError) as exc:
             QMessageBox.warning(self,"Folder stitching",str(exc))
 
+    def refresh_project_evidence(self):
+        """Reload externally saved MCP evidence and the current overlay alignment."""
+        if not self.project or not self.current_layer:
+            return
+        overlay = self.overlay_layer
+        self.select_layer(self.current_layer)
+        if overlay:
+            with self.db() as db:
+                row = db.execute('SELECT path FROM layers WHERE name=?',(overlay,)).fetchone()
+                matrix = load_alignment(db,self.current_layer,overlay)
+            if row:
+                dx,dy,angle,scale = alignment_parameters(matrix)
+                self.viewer.show_overlay(row[0],dx,dy,self.opacity.value()/100,angle,scale)
+                self.overlay_layer = overlay
+
     def select_layer(self, name):
         if not name or not self.project:
             return
@@ -498,6 +516,9 @@ class MainWindow(QMainWindow):
             markers = db.execute("SELECT x,y,label FROM markers WHERE layer=?", (name,)).fetchall()
             ensure_schema(db)
             candidates = db.execute("SELECT id,layer,x,y,width,height,status FROM trace_candidates WHERE layer=?", (name,)).fetchall()
+            evidence = []
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='mcp_evidence'").fetchone():
+                evidence = db.execute("SELECT kind,label,data,status FROM mcp_evidence WHERE layer=? AND kind IN ('polyline','region')",(name,)).fetchall()
         if not row:
             return
         try:
@@ -508,6 +529,18 @@ class MainWindow(QMainWindow):
                 self.viewer.draw_marker(x,y,label)
             for candidate in candidates:
                 self.show_candidate(candidate)
+            for kind,label,data,status in evidence:
+                coords = json.loads(data)['points']
+                path = QPainterPath(QPointF(*coords[0]))
+                for point in coords[1:]:
+                    path.lineTo(QPointF(*point))
+                if kind == 'region':
+                    path.closeSubpath()
+                pen = QPen(QColor({'candidate':'#00e5ff','accepted':'#00dd66','rejected':'#ff5555'}[status]),2)
+                pen.setCosmetic(True)
+                item = self.viewer.scene().addPath(path,pen)
+                item.setZValue(6)
+                item.setToolTip(label + ' (MCP visual evidence; electrical continuity unverified)')
             self.refresh_link_lines()
             self.show_vias()
             self.show_mos_candidates()
@@ -1279,3 +1312,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
